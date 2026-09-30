@@ -116,6 +116,12 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
 - tar 的 155 字节 **prefix 字段只有 ustar 用**；GNU 格式用 `././@LongLink` 存长名，
   在 GNU 包里读 prefix 会取到垃圾字节。**PAX 头（type `x`）必须按元数据跳过**，
   否则 `PaxHeaders/.PKGINFO` 会被当成真的 `.PKGINFO`（名字以真名结尾，正则必然误中）。
+- **CI 里 `cmd | tee` 会把失败吞掉**（Alpine 的 sh 没有 `pipefail`，管道状态是 `tee` 的）。
+  已踩：apk 安装步骤第一版因此"通过"，实际安装失败。现在先 `status=$?` 再 `cat … | tee`，
+  并在最后 `exit $status`。`check-workflow-shell.js` 会对这种写法给出提示。
+- **CI 步骤级结论和 check-run annotations 不需要 token 就能读**（日志需要）：
+  `api.github.com/repos/XIAOZHAOXSXH/gl-ai-agent/actions/runs?per_page=1` → `/jobs` → `check_run_url` → `/annotations`。
+  所以失败原因都用 `::error::` 打印成 annotation，而不是只写进日志/摘要。
 
 ### 其它
 
@@ -148,6 +154,7 @@ node scripts/build-apk.js                    # 打 apk
 node scripts/check-package.js dist/*.ipk     # 校验包内容
 node scripts/check-package.js x.apk --installed-root /tmp/apkroot   # apk v3：对装好的目录断言
 node scripts/check-package-formats.js        # 5 种容器 + 清单模式的回归
+node scripts/check-workflow-shell.js         # 校验 workflow 里 run: 块的 shell 语法
 node scripts/deploy.js                       # 开发直推（不重启 nginx）
 node scripts/deploy.js --uninstall           # 完全卸载
 node scripts/reset-device.js                 # 清理 /tmp 并报告设备状态

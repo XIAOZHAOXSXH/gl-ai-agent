@@ -12,11 +12,6 @@
 #
 # Needs apk-tools v3, so it runs in the Alpine CI job, not on a workstation.
 #
-# The Depends names in the control file (libc, lua, uci, libubus-lua) are
-# OpenWrt packages and do not exist in an Alpine container, so empty stub
-# packages are built for them to satisfy the transaction. The stubs install one
-# marker file each, under a path that is filtered out of the listing.
-#
 #   sh scripts/verify-apk-install.sh dist/gl-ai-agent-0.1.0-r1.apk [root] [listing-out]
 
 set -eu
@@ -28,85 +23,109 @@ here="$(cd "$(dirname "$0")" && pwd)"
 control="$here/../package/control/control"
 work="${root}-work"
 
+# apk is given an absolute path: a bare relative path is a package *spec*, and
+# whether it is read as a file is one more thing that varies between releases.
+case "$apk_file" in
+    /*) : ;;
+    *) apk_file="$(cd "$(dirname "$apk_file")" && pwd)/$(basename "$apk_file")" ;;
+esac
+
+# GitHub renders "::error::" lines as check-run annotations, and unlike job logs
+# those are readable through the API without a token. Anywhere else they would
+# just be noise, so they are only emitted under Actions.
+annotate() {
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        printf '::error::%s\n' "$1"
+    else
+        printf 'ERROR: %s\n' "$1"
+    fi
+}
+
+# Ask apk which flags it has instead of guessing. The flags this needs have moved
+# between releases, and an unknown flag fails the whole invocation with a usage
+# error, which in a log looks just like an install failure.
+has_flag() {
+    apk add --help 2>&1 | grep -q -- "$1"
+}
+
 echo "apk:    $(apk --version 2>&1 | head -1)"
 echo "target: $apk_file"
-
-# ---- dependency stubs ----------------------------------------------------
-deps="$(sed -n 's/^Depends:[[:space:]]*//p' "$control" | tr ',' ' ')"
-pkg_name="$(sed -n 's/^Package:[[:space:]]*//p' "$control")"
+echo "root:   $root"
 
 rm -rf "$work" "$root"
-mkdir -p "$work/stub-tree/usr/share/gl-ai-ci-stubs" "$root"
+mkdir -p "$work" "$root"
 
-stubs=""
-for d in $deps; do
-    # A marker file, because a package with no files at all may not be packable.
-    : > "$work/stub-tree/usr/share/gl-ai-ci-stubs/$d"
-    if apk mkpkg \
-        --info "name:$d" \
-        --info "version:0-r0" \
-        --info "arch:noarch" \
-        --info "description:CI stub for a router-side dependency" \
-        --files "$work/stub-tree" \
-        --output "$work/$d.apk" > "$work/stub-$d.log" 2>&1; then
-        stubs="$stubs $work/$d.apk"
-    else
-        echo "note: could not build a stub for $d:"
-        tail -3 "$work/stub-$d.log" | sed 's/^/      /'
-    fi
-done
-echo "depends:${deps:- none}"
-echo "stubs:  ${stubs:- none}"
+no_scripts=""
+if has_flag '--no-scripts'; then
+    no_scripts="--no-scripts"
+    echo "note: --no-scripts is available; the scratch root has no /bin/sh to run them with"
+fi
 
 # ---- install -------------------------------------------------------------
-# Flag sets are tried in order because this runs against whatever apk-tools the
-# job's image ships, and the exact spelling of "do not run scripts here" and
-# "do not fail on a broken world" has moved between releases. The first set that
-# works is reported, and every failure is printed rather than swallowed.
-installed=""
-for flags in \
-    "--initdb --allow-untrusted --no-network --no-scripts" \
-    "--initdb --allow-untrusted --no-network" \
-    "--initdb --allow-untrusted --no-network --force-broken-world" \
-    "--initdb --allow-untrusted --no-network --force-depends" \
-    "--initdb --allow-untrusted --no-network --force-broken-world --force-depends"
-do
-    rm -rf "$root"
-    mkdir -p "$root"
-    # shellcheck disable=SC2086  # the flag sets and stub list are meant to split
-    if apk add --root "$root" $flags "$apk_file" $stubs > "$work/add.log" 2>&1; then
-        installed="$flags"
+# The package declares no dependencies (build-apk passes no `depends` to
+# `apk mkpkg`), so a bare root is enough and no repositories are needed.
+#
+# --root is tried in both positions because apk moved its global options around,
+# and the remaining attempts add the flags that relax dependency and repository
+# checks, for the case where a future package does carry dependencies. Every
+# failure is reported, never swallowed.
+installed_with=""
+attempts=0
+for position in after before; do
+    for extra in "" "--force-broken-world" "--force-non-repository"; do
+        attempts=$((attempts + 1))
+        rm -rf "$root"
+        mkdir -p "$root"
+        # shellcheck disable=SC2086  # the flag sets are meant to word-split
+        if [ "$position" = after ]; then
+            set -- apk add --root "$root" --initdb --allow-untrusted --no-network $no_scripts $extra "$apk_file"
+        else
+            set -- apk --root "$root" add --initdb --allow-untrusted --no-network $no_scripts $extra "$apk_file"
+        fi
+        if "$@" > "$work/add.log" 2>&1; then
+            installed_with="apk --root $root ($position:${extra:-none})"
+            break
+        fi
+        echo "attempt $attempts failed [$position:${extra:-none}]: $*"
+        tail -5 "$work/add.log" | sed 's/^/      /'
+        annotate "apk install attempt failed [$position:${extra:-none}]: $(head -2 "$work/add.log" | tr '\n' ' ')"
+    done
+    if [ -n "$installed_with" ]; then
         break
     fi
-    echo "attempt failed [$flags]:"
-    tail -6 "$work/add.log" | sed 's/^/      /'
 done
 
-if [ -z "$installed" ]; then
-    echo "FAIL: apk could not install $apk_file into $root" >&2
+if [ -z "$installed_with" ]; then
+    echo "FAIL: apk could not install $apk_file into $root after $attempts attempt(s)" >&2
+    annotate "apk could not install the package after $attempts attempt(s); see the attempts above"
     exit 1
 fi
-echo "installed with: apk add --root $root $installed"
+echo "installed with: $installed_with"
 
 # apk's own record of the package - an independent cross-check of the tree.
+pkg_name="$(sed -n 's/^Package:[[:space:]]*//p' "$control" 2>/dev/null || true)"
+if [ -z "$pkg_name" ]; then
+    pkg_name="$(node -p "require('./package.json').name" 2>/dev/null || echo gl-ai-agent)"
+fi
 echo "--- apk info -L $pkg_name ---"
-apk --root "$root" info --no-network -L "$pkg_name" 2>&1 || true
+apk info --root "$root" --no-network -L "$pkg_name" 2>&1 \
+    || apk --root "$root" info --no-network -L "$pkg_name" 2>&1 || true
 
 # ---- what actually landed ------------------------------------------------
-# apk's database and the stub markers are not part of the package payload.
+# apk's own database is not part of the package payload.
 find "$root" -type f \
     | sed "s#^$root/##" \
     | grep -v '^lib/apk/' \
     | grep -v '^etc/apk/' \
-    | grep -v '^usr/share/gl-ai-ci-stubs/' \
     | sort > "$work/files.txt" || true
 
-find "$root" -type f -exec stat -c '%a %s %n' {} + \
-    | sed "s# $root/# #" \
-    | grep -v ' lib/apk/' \
-    | grep -v ' etc/apk/' \
-    | grep -v ' usr/share/gl-ai-ci-stubs/' \
-    | sort -k3 > "$work/listing.txt" || true
+# "mode size path", the form `stat -c '%a %s %n'` prints and the checker's
+# --apk-listing reads. stat is called per file because BusyBox find has no
+# `-exec ... +`, and paths are assumed to have no spaces.
+: > "$work/listing.txt"
+while IFS= read -r rel; do
+    stat -c "%a %s $rel" "$root/$rel" >> "$work/listing.txt" 2>/dev/null || true
+done < "$work/files.txt"
 
 echo "--- files on disk (mode size path) ---"
 cat "$work/listing.txt"

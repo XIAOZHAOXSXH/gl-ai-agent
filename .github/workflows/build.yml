@@ -52,6 +52,9 @@ jobs:
       - name: Shell scripts must be BusyBox-ash clean
         run: node scripts/lint-shell.js
 
+      - name: Workflow shell must parse too
+        run: node scripts/check-workflow-shell.js
+
       - name: Lua must parse under 5.1
         run: node scripts/lint-lua.js
 
