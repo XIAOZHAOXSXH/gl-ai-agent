@@ -73,6 +73,85 @@ function unar(buf) {
     return members;
 }
 
+/**
+ * Read an APKv3 (apk-tools 3) package.
+ *
+ * APKv3 is a multi-stream container, not a single gzipped tar:
+ *
+ *     <signature stream> <control stream> <data stream>
+ *
+ * Each stream is a gzip member whose first file is `debian-binary` holding
+ * "2.0\n" followed by the stream's own name, and each is terminated by a
+ * 512-byte block of zeros. The signature stream carries no gzip magic - it
+ * starts with a raw APK signature record - which is why feeding the whole file
+ * to a tar reader fails outright.
+ *
+ * Which stream holds what matters: `.PKGINFO` and the maintainer scripts live in
+ * the CONTROL stream, the installable tree lives in the DATA stream. Reading a
+ * fixed stream number would be wrong, so the streams are identified by what
+ * their debian-binary says.
+ *
+ * @returns {{data: Array, control: Array, streams: string[], isV3Signature: boolean,
+ *            gzipMembers: number}|null} null when the buffer is not a v3 container
+ */
+function readApkv3(raw) {
+    const isV3Signature = raw.subarray(0, 14).toString('ascii') === 'debian-binary\n';
+
+    const offsets = [];
+    for (let i = 0; i + 2 < raw.length; i++) {
+        if (raw[i] === 0x1f && raw[i + 1] === 0x8b && raw[i + 2] === 0x08) {
+            offsets.push(i);
+        }
+    }
+
+    let data = null;
+    let control = null;
+    const streams = [];
+
+    for (const off of offsets) {
+        let plain;
+        try {
+            plain = zlib.gunzipSync(raw.subarray(off));
+        } catch (e) {
+            continue;                       // not a member we can read; skip it
+        }
+        let entries;
+        try {
+            entries = untar(plain);
+        } catch (e) {
+            continue;
+        }
+        if (!entries.length) continue;
+
+        const db = entries.find((e) => /(^|\/)debian-binary$/.test(e.name));
+        let id = 'data';                    // apk's default stream
+        if (db) {
+            const lines = db.data.toString('utf8').split('\n').map((s) => s.trim()).filter(Boolean);
+            if (lines[1]) id = lines[1];
+        }
+        streams.push(id);
+
+        if (id === 'data' && !data) data = entries;
+        if (id === 'control' && !control) control = entries;
+    }
+
+    // Only claim the file when something was actually read, so a non-gzip
+    // container (an ar ipk, say) is not misrouted here just because it happened
+    // to contain a gzip member somewhere.
+    if (!data && !control) {
+        if (!isV3Signature) return null;
+        return { data: [], control: [], streams, isV3Signature, gzipMembers: offsets.length };
+    }
+
+    return {
+        data: data || [],
+        control: control || [],
+        streams,
+        isV3Signature,
+        gzipMembers: offsets.length,
+    };
+}
+
 function report(file) {
     console.log(`\n===== ${path.basename(file)} (${(fs.statSync(file).size / 1024).toFixed(1)} KB) =====`);
     const raw = fs.readFileSync(file);
@@ -94,7 +173,42 @@ function report(file) {
     const looksLikeIpk = gzInner
         && gzInner.some((e) => /data\.tar\.gz$/.test(e.name));
 
-    if (looksLikeApk) {
+    // Not a single gzip stream: try the APKv3 multi-stream container before
+    // giving up. This is what `apk mkpkg` (apk-tools 3) produces, and its
+    // signature stream has no gzip magic at offset 0, so a plain tar read fails.
+    const apkv3 = (!looksLikeApk && !looksLikeIpk) ? readApkv3(raw) : null;
+
+    if (apkv3) {
+        if (apkv3.isV3Signature) {
+            console.log('container: APKv3 multi-stream (.apk, apk-tools 3)');
+        } else {
+            console.log('container: gzip tar, multi-stream');
+        }
+        console.log('  gzip members found: ' + apkv3.gzipMembers);
+        if (apkv3.streams.length) console.log('  streams: ' + apkv3.streams.join(', '));
+
+        // The installable tree is the data stream; the metadata and maintainer
+        // scripts live in the control stream.
+        dataEntries = apkv3.data;
+        controlEntries = apkv3.control;
+
+        if (!dataEntries.length && !controlEntries.length) {
+            problems.push('could not read any stream from the package');
+            console.log('  first 16 bytes: ' + raw.subarray(0, 16).toString('hex'));
+        }
+
+        const pkginfo = controlEntries.find((e) => /(^|\/)\.PKGINFO$/.test(e.name))
+            || dataEntries.find((e) => /(^|\/)\.PKGINFO$/.test(e.name));
+        if (!pkginfo) {
+            problems.push('no .PKGINFO in the control stream');
+        } else {
+            console.log('  --- .PKGINFO ---');
+            console.log(
+                pkginfo.data.toString('utf8').split('\n')
+                    .filter(Boolean).map((l) => '    ' + l).join('\n')
+            );
+        }
+    } else if (looksLikeApk) {
         console.log('container: gzip tar (.apk, APKv2)');
         dataEntries = gzInner;
         const pkginfo = dataEntries.find((e) => /(^|\/)\.PKGINFO$/.test(e.name));
@@ -163,12 +277,18 @@ function report(file) {
     console.log(`  payload bytes: ${total}`);
 
     // ---- contract assertions ------------------------------------------
-    // Normalise: tar members use a "./" prefix, and APK payloads live under
-    // "data/" (with control scripts under "scripts/").
+    // Normalise the many prefixes the different writers produce:
+    //   "./x"            tar members
+    //   "data/x"         our own APKv2 payload
+    //   "/x"             apk-tools sometimes stores absolute-looking paths
+    //   ".PKGINFO"       apk control metadata at the archive root
     const files = dataEntries.filter((e) => !e.dir);
-    const names = files.map((e) => e.name.replace(/^\.\//, ''));
-    /** Strip the APK data/ prefix so both formats assert against one list. */
-    const norm = names.map((n) => (n.startsWith('data/') ? n.slice(5) : n));
+    const strip = (n) => n
+        .replace(/^\.\//, '')
+        .replace(/^\/+/, '')
+        .replace(/^data\//, '')
+        .replace(/^\.\//, '');
+    const norm = files.map((e) => strip(e.name));
 
     if (process.env.GL_DEBUG_PACKAGE) {
         console.log('  --- debug: normalised names ---');
@@ -199,14 +319,25 @@ function report(file) {
     if (norm.some((n) => n.startsWith('etc/nginx/'))) {
         problems.push('unexpected nginx config in payload (agent must not need one)');
     }
-    const rpc = dataEntries.find(
-        (e) => e.name.replace(/^\.\//, '').replace(/^data\//, '') === 'usr/lib/oui-httpd/rpc/gl_ai'
-    );
+    const rpc = dataEntries.find((e) => strip(e.name) === 'usr/lib/oui-httpd/rpc/gl_ai');
     if (rpc && (rpc.mode & 0o111) === 0) problems.push('rpc object is not executable');
 
     if (problems.length) {
         console.log('\n  RESULT: FAIL');
         problems.forEach((p) => console.log('    - ' + p));
+
+        // When the payload looks unreadable rather than merely incomplete, the
+        // container format is the likely culprit and the raw entries are the
+        // only way to tell. Dump enough to diagnose without a full hex view.
+        if (norm.length === 0 || problems.some((p) => /unrecognised|no \.PKGINFO/.test(p))) {
+            console.log('  --- diagnostics ---');
+            console.log('    first 16 bytes: ' + raw.subarray(0, 16).toString('hex'));
+            console.log('    file size:      ' + raw.length);
+            console.log('    entries read:   ' + dataEntries.length
+                + ' (' + files.length + ' files)');
+            console.log('    first entries:  '
+                + dataEntries.slice(0, 8).map((e) => JSON.stringify(e.name)).join(', '));
+        }
         return false;
     }
     console.log('\n  RESULT: OK');

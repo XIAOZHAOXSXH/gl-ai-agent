@@ -9,14 +9,23 @@
     "build:ipk": "node scripts/build-ipk.js",
     "build:apk": "node scripts/build-apk.js",
     "build": "npm run build:ui && npm run build:ipk && npm run build:apk",
+
     "check:bundle": "node scripts/check-bundle.js",
-    "check:contract": "node scripts/check-eval-contract.js",
+    "check:formats": "node scripts/check-package-formats.js",
     "check:package": "node scripts/check-package.js dist/gl-ai-agent_0.1.0_all.ipk dist/gl-ai-agent-0.1.0-r1.apk",
-    "verify:core": "node scripts/verify-core.js",
+    "check:contract": "node scripts/check-eval-contract.js",
+
+    "lint:shell": "node scripts/lint-shell.js",
+    "lint:lua": "node scripts/lint-lua.js",
+
     "verify:ui": "node scripts/verify-ui.js",
+    "verify:e2e": "node scripts/verify-e2e.js",
+    "verify:approval": "node scripts/verify-approval.js",
     "test:install": "node scripts/test-install.js",
+
     "deploy": "node scripts/deploy.js",
-    "deploy:uninstall": "node scripts/deploy.js --uninstall"
+    "deploy:uninstall": "node scripts/deploy.js --uninstall",
+    "reset:device": "node scripts/reset-device.js"
   },
   "devDependencies": {
     "css-loader": "^6.11.0",

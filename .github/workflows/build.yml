@@ -50,10 +50,13 @@ jobs:
       - run: npm ci
 
       - name: Shell scripts must be BusyBox-ash clean
-        run: npm run lint:shell --if-present || node scripts/lint-shell.js
+        run: node scripts/lint-shell.js
 
       - name: Lua must parse under 5.1
         run: node scripts/lint-lua.js
+
+      - name: Package checker must read every container format
+        run: node scripts/check-package-formats.js
 
       - name: Build the view bundle
         run: npm run build:ui
@@ -183,6 +186,18 @@ jobs:
 
       - name: Build apk with real apk-tools
         run: node scripts/build-apk.js --require-apk
+
+      # apk-tools produced it, so apk-tools is the authority on whether it is
+      # well formed. This runs inside the Alpine container, so its view of an
+      # APKv3 package is exact. Informational: the assertions below are what
+      # gate the build, because `apk info` on a local file needs flags whose
+      # availability varies between apk-tools releases.
+      - name: Cross-check with apk-tools
+        continue-on-error: true
+        run: |
+          set -x
+          apk --version
+          apk info --allow-untrusted --no-network -L dist/*.apk || true
 
       - name: Verify apk contents
         run: node scripts/check-package.js dist/*.apk
