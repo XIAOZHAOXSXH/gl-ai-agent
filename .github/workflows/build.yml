@@ -245,6 +245,27 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+          # An annotation can carry far more than the log view shows, and unlike
+          # job logs it is readable without a token. So the ends of the outputs
+          # that actually explain a failure are packed into a few annotations:
+          # the install log's tail (where apk says what went wrong), what this
+          # apk-tools build accepts, and what it thinks the package contains.
+          # Newlines become "|" and % becomes %25, so each one stays a single
+          # workflow command.
+          pack() {
+            sed -e 's/%/%25/g' | tr '\n' '|' | cut -c1-1400
+          }
+          printf '::error::apk --version: %s\n' "$(apk --version 2>&1 | pack)"
+          printf '::error::apk add flags: %s\n' \
+            "$(apk add --help 2>&1 | grep -iE 'script|--root|initdb|force|allow|network' | pack)"
+          if [ -f "$GITHUB_WORKSPACE/install.log" ]; then
+            printf '::error::install log tail: %s\n' "$(tail -25 "$GITHUB_WORKSPACE/install.log" | pack)"
+          fi
+          printf '::error::apk adbdump: %s\n' \
+            "$(apk adbdump dist/*.apk 2>&1 | head -50 | pack)"
+          printf '::error::apk manifest: %s\n' \
+            "$(apk manifest --allow-untrusted dist/*.apk 2>&1 | head -12 | pack)"
+
           # The container-only view is unreadable by design, so a problem list
           # from it is noise. If a root exists, ask about that instead: those
           # problems are the ones worth reading.

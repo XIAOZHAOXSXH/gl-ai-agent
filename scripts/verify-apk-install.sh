@@ -108,8 +108,10 @@ for position in after before; do
             break
         fi
         echo "attempt $attempts failed [$position:${extra:-none}]: $*"
-        tail -5 "$work/add.log" | sed 's/^/      /'
-        annotate "apk install attempt failed [$position:${extra:-none}]: $(head -2 "$work/add.log" | tr '\n' ' ')"
+        tail -8 "$work/add.log" | sed 's/^/      /'
+        # The error is at the end of apk's output; the beginning only says what
+        # it was doing when things went wrong.
+        annotate "apk install attempt [$position:${extra:-none}] failed: $(tail -3 "$work/add.log" | tr '\n' '|')"
     done
     if [ -n "$installed_with" ]; then
         break
