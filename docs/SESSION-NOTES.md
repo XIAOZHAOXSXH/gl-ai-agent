@@ -41,13 +41,17 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
 
 1. **配置模型 API 后跑一次真实写入**。设备恢复出厂后 key 已清空，且确认闸门测试全程只做"拒绝"，
    所以**"批准后真正写入"这条路径尚未在真机验证**。建议先在可改字段上试（如时区），再试 WiFi。
-2. **CI 的 apk 校验**：APKv3 是 ADB 容器、本地无法解码（见第三节"打包"），已改成
-   `apk add --root` 装进临时根 + `check-package.js --installed-root` 断言真实落盘文件。
-   下一次 CI 要确认：`alpine:3.23` 里 `apk mkpkg` 产出的包能被 `apk add --root --initdb` 装上，
-   且 23 个文件与权限全部符合（尤其是 `usr/lib/oui-httpd/rpc/gl_ai` 的 0755）。
+2. **CI 已全绿**（run 11 / `dbbe4f5`）：`validate`、`ipk`、`apk` 三个 job 全过，
+   apk 产物 64 KB、ipk 产物 66 KB，都上传为 artifact。
+   apk 的校验方式：`apk add --root /tmp/apkroot` 真装一遍，再对落盘结果断言
+   （`--scripts=no` 跳过维护脚本，脚本本身在真机验证）。
 3. **会话历史 UI**：后端 `list_sessions` / `get_session` / `delete_session` 已就绪，界面未接。
 4. **仓库推送**：已完成 —— https://github.com/XIAOZHAOXSXH/gl-ai-agent
    （仓库简介与 topics 仍需在网页端填）。
+5. **apk 的 Depends 还是空的**：`build-apk.js` 走 `apk mkpkg` 时没有传 `--info depends:…`
+   （ipk 的 control 里有 `Depends: libc, lua, uci, libubus-lua`）。真机上这些依赖本来就在，
+   所以不影响使用；要对齐 ipk 就补上 `--info depends:...`，但 CI 的临时根里没有这些包，
+   届时要么放 stub 包，要么维持现状。
 
 ---
 
@@ -119,9 +123,15 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
 - **CI 里 `cmd | tee` 会把失败吞掉**（Alpine 的 sh 没有 `pipefail`，管道状态是 `tee` 的）。
   已踩：apk 安装步骤第一版因此"通过"，实际安装失败。现在先 `status=$?` 再 `cat … | tee`，
   并在最后 `exit $status`。`check-workflow-shell.js` 会对这种写法给出提示。
+- **apk-tools 3.0.8 关脚本的写法是 `--scripts=no`，不是 `--no-scripts`**（v2 的写法）。
+  探测错参数的后果：`apk add --root` 会真的在 chroot 里跑 `post-install`，
+  而空的 root 里既没有 `/bin/sh`，Alpine 的 busybox 又是动态链接的（缺 `/lib/ld-musl-*.so.1`），
+  apk 于是报 `execve: No such file or directory` + `exited with error 127` —— 文件全都写完了才失败，
+  看起来像包坏了，其实是测试环境缺 shell。`apk add --help` 里还能看到 `--force-no-chroot`。
 - **CI 步骤级结论和 check-run annotations 不需要 token 就能读**（日志需要）：
   `api.github.com/repos/XIAOZHAOXSXH/gl-ai-agent/actions/runs?per_page=1` → `/jobs` → `check_run_url` → `/annotations`。
   所以失败原因都用 `::error::` 打印成 annotation，而不是只写进日志/摘要。
+  annotation 的正文比日志视图长得多，把 `tail -25 日志` 压成一行塞进去是有效的排障手段。
 
 ### 其它
 
