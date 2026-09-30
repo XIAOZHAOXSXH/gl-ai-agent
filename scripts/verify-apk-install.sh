@@ -56,29 +56,39 @@ rm -rf "$work" "$root"
 mkdir -p "$work" "$root"
 
 no_scripts=""
-if has_flag '--no-scripts'; then
+if has_flag --scripts; then
+    # apk-tools 3 spells it --scripts[=BOOL]; that is what 3.0.8 on the runner
+    # documents, and why probing for --no-scripts found nothing and the
+    # maintainer script was executed instead.
+    no_scripts="--scripts=no"
+elif has_flag --no-scripts; then
     no_scripts="--no-scripts"
-    echo "note: --no-scripts is available; the scratch root has no /bin/sh to run them with"
+fi
+if [ -n "$no_scripts" ]; then
+    echo "note: scripts disabled with $no_scripts (the package's install script is"
+    echo "      verified on the device instead; here it would run in a bare root)"
 else
-    echo "note: this apk has no --no-scripts; the maintainer scripts will run for real"
+    echo "note: this apk cannot disable scripts; the root will be given a shell"
 fi
 
-# apk executes maintainer scripts inside the target root. A bare root has no
-# shell there, so `post-install` cannot be exec'd at all and the transaction
-# fails *after* writing every file - which looks like a package defect from the
-# outside and is not one. Planting the container's BusyBox as /bin/sh fixes that,
-# and makes this a truer test than skipping the scripts would be: the package's
-# own install script gets to run, in a root that is empty except for the package.
-# /tmp is created too, since that is where a script gets staged before it runs.
-prepare_root() {
-    mkdir -p "$root/tmp"
-    chmod 1777 "$root/tmp" 2>/dev/null || true
-    if [ -x /bin/busybox ]; then
-        mkdir -p "$root/bin"
-        cp /bin/busybox "$root/bin/busybox" 2>/dev/null || true
-        ln -sf busybox "$root/bin/sh" 2>/dev/null \
-            || cp "$root/bin/busybox" "$root/bin/sh" 2>/dev/null || true
+# If scripts cannot be disabled they are executed with the root as their
+# filesystem, and a bare root has neither a shell nor the loader a dynamically
+# linked one needs: Alpine's BusyBox needs /lib/ld-musl-*.so.1, and without it
+# execve fails with ENOENT - apk reports "exited with error 127" *after* writing
+# every file, which reads like a defect in the package and is not one.
+plant_shell() {
+    if [ -x "$root/bin/sh" ] || [ ! -x /bin/busybox ]; then
+        return 0
     fi
+    mkdir -p "$root/bin" "$root/lib"
+    cp /bin/busybox "$root/bin/busybox" 2>/dev/null || true
+    ln -sf busybox "$root/bin/sh" 2>/dev/null \
+        || cp "$root/bin/busybox" "$root/bin/sh" 2>/dev/null || true
+    for ldr in /lib/ld-musl-*.so.1; do
+        if [ -e "$ldr" ]; then
+            cp "$ldr" "$root/lib/" 2>/dev/null || true
+        fi
+    done
 }
 
 # ---- install -------------------------------------------------------------
@@ -92,11 +102,13 @@ prepare_root() {
 installed_with=""
 attempts=0
 for position in after before; do
-    for extra in "" "--force-broken-world" "--force-non-repository"; do
+    for extra in "$no_scripts" "--scripts=false" "" "--force-broken-world" "--force-non-repository"; do
         attempts=$((attempts + 1))
         rm -rf "$root"
         mkdir -p "$root"
-        prepare_root
+        if [ -z "$no_scripts" ]; then
+            plant_shell
+        fi
         # shellcheck disable=SC2086  # the flag sets are meant to word-split
         if [ "$position" = after ]; then
             set -- apk add --root "$root" --initdb --allow-untrusted --no-network $no_scripts $extra "$apk_file"
@@ -136,14 +148,16 @@ apk info --root "$root" --no-network -L "$pkg_name" 2>&1 \
 
 # ---- what actually landed ------------------------------------------------
 # apk's own database is not part of the package payload, and neither is the
-# BusyBox planted above so maintainer scripts could execute. The package ships
-# no /bin entries of its own, so filtering those two names hides nothing.
+# BusyBox and musl loader planted above so maintainer scripts could execute. The
+# package ships no /bin entries of its own, so filtering those names hides
+# nothing.
 find "$root" -type f \
     | sed "s#^$root/##" \
     | grep -v '^lib/apk/' \
     | grep -v '^etc/apk/' \
     | grep -v '^bin/busybox$' \
     | grep -v '^bin/sh$' \
+    | grep -v '^lib/ld-musl-' \
     | sort > "$work/files.txt" || true
 
 # "mode size path", the form `stat -c '%a %s %n'` prints and the checker's
