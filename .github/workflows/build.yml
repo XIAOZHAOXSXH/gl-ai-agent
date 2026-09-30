@@ -187,28 +187,40 @@ jobs:
       - name: Build apk with real apk-tools
         run: node scripts/build-apk.js --require-apk
 
-      # apk-tools produced it, so apk-tools is the authority on whether it is
-      # well formed. Output also lands in the job summary so it is visible without
-      # downloading logs.
-      - name: Cross-check with apk-tools
-        continue-on-error: true
+      # An APKv3 package is an ADB container: "ADBd" followed by compressed ADB,
+      # with no gzip, zstd or ustar bytes anywhere (verified against a package
+      # from the OpenWrt 25.12 feed). Nothing inside it can be read without an
+      # ADB decoder, so the checks that matter are made by apk-tools itself:
+      # install the package into a scratch root and assert against what landed.
+      - name: Install into a scratch root (authoritative)
         run: |
-          {
-            echo '## apk-tools cross-check'
-            echo '```'
-            apk --version
-            apk info --allow-untrusted --no-network -L dist/*.apk 2>&1 || echo "(apk info could not read it)"
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          set -eux
+          root=/tmp/apkroot
+          rm -rf "$root"
+          mkdir -p "$root"
+          # --initdb is what makes a bare root installable; --no-scripts keeps
+          # maintainer scripts from running here, where there is no router to
+          # configure. Fall back if this apk-tools build spells it differently.
+          apk add --root "$root" --initdb --allow-untrusted --no-network --no-scripts dist/*.apk \
+            || apk add --root "$root" --initdb --allow-untrusted --no-network dist/*.apk
+
+          # apk's own record of the package: the independent cross-check.
+          apk --root "$root" info --no-network -L "$(node -p "require('./package.json').name")" \
+            > "$GITHUB_WORKSPACE/apk-manifest.txt" 2>&1 || true
+          echo "--- apk info -L ---"
+          head -40 "$GITHUB_WORKSPACE/apk-manifest.txt" || true
+
+          echo "--- installed tree ---"
+          find "$root" -path "$root/lib/apk" -prune -o -path "$root/etc/apk" -prune -o -type f -print \
+            | sed "s#^$root/##" | sort | tee "$GITHUB_WORKSPACE/installed.txt"
+          echo "files: $(wc -l < "$GITHUB_WORKSPACE/installed.txt")"
 
       - name: Verify apk contents
-        run: node scripts/check-package.js dist/*.apk
+        run: node scripts/check-package.js dist/*.apk --installed-root /tmp/apkroot
 
-      # CI is the only place a real apk-tools package exists, so when the checker
-      # cannot read one this reports the container's actual shape. The output goes
-      # to the job summary as well as the log, because retrieving raw logs needs
-      # an authenticated token while the summary renders on the run page for
-      # anyone who can see the repository.
+      # When the checker cannot read a container, the next thing anyone wants is
+      # its actual shape. This runs only on failure and prints everything needed
+      # to diagnose it, into the log and the job summary.
       - name: Dump apk container shape (diagnostic)
         if: failure()
         run: |
@@ -219,6 +231,13 @@ jobs:
             echo
             echo '## checker output'
             node scripts/check-package.js dist/*.apk 2>&1 || true
+            echo '```'
+            echo '## apk-tools said'
+            echo '```'
+            cat "$GITHUB_WORKSPACE/apk-manifest.txt" 2>/dev/null || echo '(no manifest)'
+            echo
+            echo '## installed tree'
+            cat "$GITHUB_WORKSPACE/installed.txt" 2>/dev/null || echo '(nothing installed)'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 

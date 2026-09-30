@@ -41,10 +41,13 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
 
 1. **配置模型 API 后跑一次真实写入**。设备恢复出厂后 key 已清空，且确认闸门测试全程只做"拒绝"，
    所以**"批准后真正写入"这条路径尚未在真机验证**。建议先在可改字段上试（如时区），再试 WiFi。
-2. **GitHub Actions 已写好但未在 CI 跑过**（`.github/workflows/build.yml`）。首个 tag 后确认：
-   `ubuntu-latest` 的 `npm ci` 与 lua5.1 依赖、`alpine:3.23` 里 `apk mkpkg` 是否产出 APKv3。
+2. **CI 的 apk 校验**：APKv3 是 ADB 容器、本地无法解码（见第三节"打包"），已改成
+   `apk add --root` 装进临时根 + `check-package.js --installed-root` 断言真实落盘文件。
+   下一次 CI 要确认：`alpine:3.23` 里 `apk mkpkg` 产出的包能被 `apk add --root --initdb` 装上，
+   且 23 个文件与权限全部符合（尤其是 `usr/lib/oui-httpd/rpc/gl_ai` 的 0755）。
 3. **会话历史 UI**：后端 `list_sessions` / `get_session` / `delete_session` 已就绪，界面未接。
-4. **仓库推送**：名字建议 `gl-ai-agent`（包名、菜单键、i18n 前缀均已按此命名）。
+4. **仓库推送**：已完成 —— https://github.com/XIAOZHAOXSXH/gl-ai-agent
+   （仓库简介与 topics 仍需在网页端填）。
 
 ---
 
@@ -95,11 +98,24 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
   **不是 ar**。opkg 对 ar 形式直接报 "Malformed package file"。
 - **`.apk` 也是 gzip tar**，所以不能靠魔数区分两者 —— 校验器改为**按内容判断**
   （有 `.PKGINFO` 是 apk，有 `data.tar.gz` 是 ipk）。
+- **APKv2 的真实布局（已用 Alpine 3.20 `lua5.1-lzlib` 实物核对）**：
+  载荷直接位于压缩包**根目录**（`usr/…`，**没有** `data/` 前缀），维护脚本是根目录下的
+  **点前缀成员**（`.post-install`、`.pre-deinstall`），并且**每个成员前面都带一个 PAX 扩展头**
+  （`PaxHeaders/<真名>`）。三条最初全写错了，`scripts/check-package-formats.js` 现在按实物形状固化。
+  本地回退打包（`build-apk.js` 的 APKv2 分支）已同步修正。
+- **APKv3（apk-tools 3）是 ADB 容器，不是 tar**（已用 OpenWrt 25.12 `6rd-13.apk` 实物核对）：
+  文件以 `ADBd` 开头，之后是 deflate 压缩的 ADB，全文件**找不到任何 gzip / zstd / ustar 字节**，
+  唯一的可读字符串就是 `ADBd` 本身。所以**不要在 Node 里解析 apk v3**（CI 曾因此误判格式、白折腾几轮）：
+  CI 的做法是把包 `apk add --root /tmp/apkroot --initdb --allow-untrusted --no-scripts` 装进临时根，
+  再用 `check-package.js --installed-root` 对**真实落盘的文件和权限**做断言。
+  校验器在没有外部清单时会明确报 FAIL 并提示传 `--installed-root`，不会假装读过。
 - **Windows 自带 bsdtar**：不支持 `--owner` / `--group` / `--mtime` / `--mode`，且 `fs.chmodSync` 是空操作
   （文件恒为 0666）。所以 `lib/tar.js` 探测 tar 能力：GNU tar 可用就用它，否则**自己写 ustar** 并显式写入
   每个文件的模式 —— 否则 RPC 对象到不了可执行位，真机装不上。CI 是 Linux，走 GNU tar 分支。
+  同理，`--installed-root` 在 Windows 上读到的权限位不可信，校验器会报 "unknown" 并跳过权限断言。
 - tar 的 155 字节 **prefix 字段只有 ustar 用**；GNU 格式用 `././@LongLink` 存长名，
-  在 GNU 包里读 prefix 会取到垃圾字节。
+  在 GNU 包里读 prefix 会取到垃圾字节。**PAX 头（type `x`）必须按元数据跳过**，
+  否则 `PaxHeaders/.PKGINFO` 会被当成真的 `.PKGINFO`（名字以真名结尾，正则必然误中）。
 
 ### 其它
 
@@ -130,6 +146,8 @@ node scripts/build-ui.js                     # 编译视图 bundle
 node scripts/build-ipk.js                    # 打 ipk
 node scripts/build-apk.js                    # 打 apk
 node scripts/check-package.js dist/*.ipk     # 校验包内容
+node scripts/check-package.js x.apk --installed-root /tmp/apkroot   # apk v3：对装好的目录断言
+node scripts/check-package-formats.js        # 5 种容器 + 清单模式的回归
 node scripts/deploy.js                       # 开发直推（不重启 nginx）
 node scripts/deploy.js --uninstall           # 完全卸载
 node scripts/reset-device.js                 # 清理 /tmp 并报告设备状态

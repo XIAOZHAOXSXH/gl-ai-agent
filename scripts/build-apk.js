@@ -2,12 +2,14 @@
  * Build an OpenWrt .apk package (apk-tools v3, OpenWrt 24.10+/25).
  *
  * Preferred path: the real `apk mkpkg` from apk-tools 3, which produces a
- * genuine APKv3 package and is what the GitHub Actions runner uses.
+ * genuine APKv3 package and is what the GitHub Actions runner uses. `--files`
+ * takes the *installed filesystem root*, so the staged tree is passed as-is -
+ * paths inside the package then match paths on the router.
  *
- * Local path: when apk-tools is not installed, a spec-conformant APKv2 is
- * assembled directly (gzip tar of /scripts + /data with a .PKGINFO header),
- * so the packaging can still be exercised off-device. Pass --require-apk to
- * make the absence of apk-tools a hard error instead.
+ * Local path: when apk-tools is not installed, an APKv2 is assembled directly
+ * (gzipped tar with .PKGINFO at the root and the tree beneath it), so the
+ * packaging can still be exercised off-device. Pass --require-apk to make the
+ * absence of apk-tools a hard error instead.
  *
  *   node scripts/build-apk.js
  */
@@ -26,6 +28,16 @@ const ARCH = 'noarch';
 const STAGE = path.join(ROOT, '.apkstage');
 const DIST = path.join(ROOT, 'dist');
 const REQUIRE_APK = process.argv.includes('--require-apk');
+
+/**
+ * Maintainer scripts travel as dot-prefixed members at the archive root.
+ *
+ * This is not a guess: lua5.1-lzlib from the Alpine 3.20 feed lists
+ * ".PKGINFO", ".SIGN.RSA...", "usr/..." - the payload at the root, never under
+ * a "data/" prefix, with the lifecycle scripts as dot members beside it.
+ * `scripts/check-package-formats.js` pins that shape.
+ */
+const MAINTAINER_MEMBERS = ['.post-install', '.pre-deinstall', '.post-deinstall'];
 
 // APK versions use "x.y.z-rN".
 const base = pkg.version;
@@ -142,20 +154,30 @@ function buildApkV2(controlText) {
     rmrf(tree);
     fs.mkdirSync(tree, { recursive: true });
     fs.writeFileSync(path.join(tree, '.PKGINFO'), pkginfo);
-    copyDir(path.join(STAGE, 'data'), path.join(tree, 'data'));
-    if (fs.existsSync(path.join(STAGE, 'scripts'))) {
-        copyDir(path.join(STAGE, 'scripts'), path.join(tree, 'scripts'));
+
+    // The payload sits at the archive ROOT. A real package from the Alpine feed
+    // lists ".PKGINFO", ".post-install", "usr/...", "etc/..." and nothing else;
+    // wrapping the tree in a "data/" directory - as this fallback first did -
+    // would install every file under /data/.
+    copyDir(path.join(STAGE, 'data'), tree);
+
+    // Maintainer scripts are dot-prefixed members at the root too, not a
+    // "scripts/" directory.
+    for (const [apkName, dotName] of [
+        ['post-install', '.post-install'],
+        ['pre-deinstall', '.pre-deinstall'],
+        ['post-deinstall', '.post-deinstall'],
+    ]) {
+        const src = path.join(STAGE, 'scripts', apkName);
+        if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tree, dotName));
     }
 
     // Modes must be recorded explicitly: the RPC object has to arrive executable,
     // and on Windows neither chmod nor bsdtar can express that. The manual writer
     // in lib/tar applies this mapping; GNU tar uses the on-disk modes instead.
-    applyModes(path.join(tree, 'data'), executable);
-    tarGz(tree, OUT, (rel) => {
-        const r = rel.replace(/^data\//, '');
-        if (r.startsWith('scripts/') || r.startsWith('.')) return 0o755;
-        return executable(r) ? 0o755 : 0o644;
-    });
+    const isExec = (rel) => MAINTAINER_MEMBERS.includes(rel) || executable(rel);
+    applyModes(tree, isExec);
+    tarGz(tree, OUT, (rel) => (isExec(rel) ? 0o755 : 0o644));
     rmrf(tmp);
     rmrf(tree);
 }
