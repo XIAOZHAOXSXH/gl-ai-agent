@@ -245,8 +245,14 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-          node scripts/check-package.js dist/*.apk 2>&1 | grep -E '^ +- ' | head -6 \
-            | while IFS= read -r l; do printf '::error::checker: %s\n' "$l"; done
+          # The container-only view is unreadable by design, so a problem list
+          # from it is noise. If a root exists, ask about that instead: those
+          # problems are the ones worth reading.
+          if [ -d /tmp/apkroot ]; then
+            node scripts/check-package.js dist/*.apk --installed-root /tmp/apkroot 2>&1 \
+              | grep -E '^ +- ' | head -6 \
+              | while IFS= read -r l; do printf '::error::checker(installed): %s\n' "$l"; done
+          fi
           grep -E '/rpc/gl_ai$' "$GITHUB_WORKSPACE/apk-installed.txt" 2>/dev/null \
             | while IFS= read -r l; do printf '::notice::rpc object: %s\n' "$l"; done
 

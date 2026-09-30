@@ -59,7 +59,27 @@ no_scripts=""
 if has_flag '--no-scripts'; then
     no_scripts="--no-scripts"
     echo "note: --no-scripts is available; the scratch root has no /bin/sh to run them with"
+else
+    echo "note: this apk has no --no-scripts; the maintainer scripts will run for real"
 fi
+
+# apk executes maintainer scripts inside the target root. A bare root has no
+# shell there, so `post-install` cannot be exec'd at all and the transaction
+# fails *after* writing every file - which looks like a package defect from the
+# outside and is not one. Planting the container's BusyBox as /bin/sh fixes that,
+# and makes this a truer test than skipping the scripts would be: the package's
+# own install script gets to run, in a root that is empty except for the package.
+# /tmp is created too, since that is where a script gets staged before it runs.
+prepare_root() {
+    mkdir -p "$root/tmp"
+    chmod 1777 "$root/tmp" 2>/dev/null || true
+    if [ -x /bin/busybox ]; then
+        mkdir -p "$root/bin"
+        cp /bin/busybox "$root/bin/busybox" 2>/dev/null || true
+        ln -sf busybox "$root/bin/sh" 2>/dev/null \
+            || cp "$root/bin/busybox" "$root/bin/sh" 2>/dev/null || true
+    fi
+}
 
 # ---- install -------------------------------------------------------------
 # The package declares no dependencies (build-apk passes no `depends` to
@@ -76,6 +96,7 @@ for position in after before; do
         attempts=$((attempts + 1))
         rm -rf "$root"
         mkdir -p "$root"
+        prepare_root
         # shellcheck disable=SC2086  # the flag sets are meant to word-split
         if [ "$position" = after ]; then
             set -- apk add --root "$root" --initdb --allow-untrusted --no-network $no_scripts $extra "$apk_file"
@@ -112,11 +133,15 @@ apk info --root "$root" --no-network -L "$pkg_name" 2>&1 \
     || apk --root "$root" info --no-network -L "$pkg_name" 2>&1 || true
 
 # ---- what actually landed ------------------------------------------------
-# apk's own database is not part of the package payload.
+# apk's own database is not part of the package payload, and neither is the
+# BusyBox planted above so maintainer scripts could execute. The package ships
+# no /bin entries of its own, so filtering those two names hides nothing.
 find "$root" -type f \
     | sed "s#^$root/##" \
     | grep -v '^lib/apk/' \
     | grep -v '^etc/apk/' \
+    | grep -v '^bin/busybox$' \
+    | grep -v '^bin/sh$' \
     | sort > "$work/files.txt" || true
 
 # "mode size path", the form `stat -c '%a %s %n'` prints and the checker's
