@@ -1,0 +1,32 @@
+{
+    "menu_gl_ai": "Asistente GL-AI",
+    "gl_ai": {
+        "title": "Asistente GL-AI",
+        "subtitle": "Configura tu router con una frase",
+        "empty_title": "Dime qué quieres cambiar",
+        "empty_desc": "WiFi, límites de velocidad, bloquear dispositivos, encontrar la causa de los cortes: habla normal.",
+        "input_placeholder": "¿Qué quieres cambiar?",
+        "send": "Enviar",
+        "stop": "Detener",
+        "thinking": "Pensando",
+        "risk_low": "solo lectura",
+        "risk_medium": "requiere confirmar",
+        "risk_high": "riesgo alto",
+        "applied": "Aplicado",
+        "rolled_back": "Revertido",
+        "confirm_apply": "Aplicar cambios",
+        "confirm_cancel": "Cancelar",
+        "revert": "Deshacer el último cambio",
+        "settings": "Ajustes",
+        "history": "Historial",
+        "new_chat": "Nueva conversación",
+        "advanced": "Advanced",
+        "advanced_hint": "Leave these alone unless you need them",
+        "stream": "Stream tokens",
+        "stream_hint": "Ask the model to stream. Unstable on some networks, so it is off by default; replies still appear progressively without it.",
+        "test_fail": "Connection failed",
+        "test_ok": "Connected",
+        "verify_tls": "Verify TLS certificate",
+        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security."
+    }
+}

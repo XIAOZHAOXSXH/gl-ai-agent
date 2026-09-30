@@ -1,0 +1,221 @@
+name: build
+
+# Builds both package formats and publishes them to a GitHub Release.
+#
+#   push to any branch      -> build + upload workflow artifacts (no release)
+#   push a tag like v0.1.0  -> build + publish a Release named after the tag
+#   manual dispatch         -> optional tag override, optional prerelease flag
+#
+# Two jobs because the formats need different toolchains: .ipk is assembled with
+# Node alone, while .apk wants apk-tools v3, which ships in Alpine 3.23+.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag. Leave empty to use package.json's version."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the release as a prerelease."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Shared validation: runs once, both builds depend on it.
+  # ---------------------------------------------------------------------------
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install Lua 5.1 (matches the router)
+        run: sudo apt-get update && sudo apt-get install -y lua5.1
+
+      - run: npm ci
+
+      - name: Shell scripts must be BusyBox-ash clean
+        run: npm run lint:shell --if-present || node scripts/lint-shell.js
+
+      - name: Lua must parse under 5.1
+        run: node scripts/lint-lua.js
+
+      - name: Build the view bundle
+        run: npm run build:ui
+
+      - name: Bundle must satisfy the SDK loader contract
+        run: node scripts/check-bundle.js
+
+  # ---------------------------------------------------------------------------
+  # .ipk for OpenWrt 21-22 / GL.iNet firmware 3.x-4.x (opkg)
+  # ---------------------------------------------------------------------------
+  ipk:
+    name: ipk (opkg)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Resolve version and tag
+        id: rel
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Sync package version from the tag
+        run: |
+          set -eu
+          ver="${{ steps.rel.outputs.tag }}"
+          ver="${ver#v}"
+          node -e "const fs=require('fs');const p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$ver"
+
+      - name: Build ipk
+        run: npm run build:ipk
+
+      - name: Verify ipk contents
+        run: node scripts/check-package.js dist/*.ipk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gl-ai-agent-ipk
+          path: dist/*.ipk
+          if-no-files-found: error
+
+      - name: Publish to Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          PRE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -eu
+          notes="GL-AI助手 $(basename "$TAG")
+
+          Built from ${GITHUB_SHA}.
+
+          **Install (OpenWrt 21-22 / GL.iNet firmware 3.x-4.x, opkg)**
+          \`\`\`
+          opkg install gl-ai-agent_*_all.ipk
+          \`\`\`
+          Then open the router admin panel and pick **系统 -> GL-AI助手**.
+          Configure your model API on that page; nothing else is required."
+          if [ "${PRE:-false}" = "true" ]; then flag="--prerelease"; else flag=""; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.ipk --clobber
+          else
+            gh release create "$TAG" dist/*.ipk --target "$GITHUB_SHA" \
+              --title "$TAG" --notes "$notes" ${flag:-}
+          fi
+
+  # ---------------------------------------------------------------------------
+  # .apk for OpenWrt 24.10+ (apk-tools v3)
+  # ---------------------------------------------------------------------------
+  apk:
+    name: apk (apk-tools v3)
+    needs: validate
+    runs-on: ubuntu-latest
+    container: alpine:3.23
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache nodejs npm git github-cli tar
+
+      - uses: actions/checkout@v4
+
+      - run: npm ci
+
+      - name: Toolchain versions
+        run: |
+          node --version
+          apk --version
+
+      - name: Resolve version and tag
+        id: rel
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Sync package version from the tag
+        run: |
+          set -eu
+          ver="${{ steps.rel.outputs.tag }}"
+          ver="${ver#v}"
+          node -e "const fs=require('fs');const p=require('./package.json');p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$ver"
+
+      - name: Build apk with real apk-tools
+        run: node scripts/build-apk.js --require-apk
+
+      - name: Verify apk contents
+        run: node scripts/check-package.js dist/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gl-ai-agent-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+      - name: Publish to Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          PRE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -eu
+          git config --global --add safe.directory '*'
+          notes="GL-AI助手 $(basename "$TAG") — apk build
+
+          Built from ${GITHUB_SHA} with apk-tools v3.
+
+          **Install (OpenWrt 24.10+, apk)**
+          \`\`\`
+          apk add --allow-untrusted gl-ai-agent-*.apk
+          \`\`\`
+          Then open the router admin panel and pick **系统 -> GL-AI助手**."
+          if [ "${PRE:-false}" = "true" ]; then flag="--prerelease"; else flag=""; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.apk --clobber
+          else
+            gh release create "$TAG" dist/*.apk --target "$GITHUB_SHA" \
+              --title "$TAG" --notes "$notes" ${flag:-} \
+              || gh release upload "$TAG" dist/*.apk --clobber
+          fi

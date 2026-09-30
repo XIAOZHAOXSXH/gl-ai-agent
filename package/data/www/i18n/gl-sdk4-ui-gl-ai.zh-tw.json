@@ -1,0 +1,32 @@
+{
+    "menu_gl_ai": "GL-AI 助手",
+    "gl_ai": {
+        "title": "GL-AI 助手",
+        "subtitle": "用一句話設定你的路由器",
+        "empty_title": "告訴我你想怎麼調網路",
+        "empty_desc": "改 WiFi、限速、封鎖裝置、排查卡頓 —— 說人話就行。",
+        "input_placeholder": "說說你想改什麼…",
+        "send": "傳送",
+        "stop": "停止",
+        "thinking": "思考中",
+        "risk_low": "唯讀",
+        "risk_medium": "需確認",
+        "risk_high": "高風險",
+        "applied": "已套用",
+        "rolled_back": "已還原",
+        "confirm_apply": "套用變更",
+        "confirm_cancel": "取消",
+        "revert": "復原上一步",
+        "settings": "設定",
+        "history": "歷史",
+        "new_chat": "新對話",
+        "advanced": "Advanced",
+        "advanced_hint": "Leave these alone unless you need them",
+        "stream": "Stream tokens",
+        "stream_hint": "Ask the model to stream. Unstable on some networks, so it is off by default; replies still appear progressively without it.",
+        "test_fail": "Connection failed",
+        "test_ok": "Connected",
+        "verify_tls": "Verify TLS certificate",
+        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security."
+    }
+}

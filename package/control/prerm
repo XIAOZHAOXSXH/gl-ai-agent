@@ -1,0 +1,9 @@
+#!/bin/sh
+# GL-AI助手 pre-remove: stop serving the page before the files disappear.
+set -e
+
+if [ -x /etc/init.d/nginx ]; then
+    nginx -t >/dev/null 2>&1 && /etc/init.d/nginx reload >/dev/null 2>&1 || true
+fi
+
+exit 0

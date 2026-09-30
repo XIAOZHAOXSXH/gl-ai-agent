@@ -1,0 +1,37 @@
+# Line endings matter here: these files run on the router as /bin/sh (BusyBox ash)
+# and are parsed by Lua 5.1. A CRLF shebang line ("#!/bin/sh\r") makes the script
+# unrunnable, and CRLF inside Lua is harmless but noisy in diffs. Force LF in the
+# repository for everything that ends up on the device, so a Windows checkout
+# cannot corrupt them.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.lua  text eol=lf
+*.json text eol=lf
+*.js   text eol=lf
+*.vue  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.conf text eol=lf
+
+# No extension, but they are shell scripts installed into the package
+package/control/postinst  text eol=lf
+package/control/prerm     text eol=lf
+package/control/postrm    text eol=lf
+package/control/preinst   text eol=lf
+package/control/control   text eol=lf
+package/data/usr/lib/oui-httpd/rpc/gl_ai  text eol=lf
+
+# Pre-compressed payload: never touch these
+*.gz    binary
+*.ipk   binary
+*.apk   binary
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+
+# Keep workflow files exactly as written
+.github/workflows/*.yml text eol=lf

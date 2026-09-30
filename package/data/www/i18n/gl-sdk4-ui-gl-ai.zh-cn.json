@@ -1,0 +1,32 @@
+{
+    "menu_gl_ai": "GL-AI助手",
+    "gl_ai": {
+        "title": "GL-AI助手",
+        "subtitle": "用一句话配置你的路由器",
+        "empty_title": "告诉我你想怎么调网络",
+        "empty_desc": "改 WiFi、限速、拉黑设备、排查卡顿 —— 说人话就行。",
+        "input_placeholder": "说说你想改什么…",
+        "send": "发送",
+        "stop": "停止",
+        "thinking": "思考中",
+        "risk_low": "只读",
+        "risk_medium": "需确认",
+        "risk_high": "高风险",
+        "applied": "已应用",
+        "rolled_back": "已回滚",
+        "confirm_apply": "应用更改",
+        "confirm_cancel": "取消",
+        "revert": "撤销上一步",
+        "settings": "设置",
+        "history": "历史",
+        "new_chat": "新会话",
+        "advanced": "高级选项",
+        "advanced_hint": "不确定就别动这两项",
+        "verify_tls": "校验 TLS 证书",
+        "verify_tls_hint": "公共/酒店网络的上游常有自签证书劫持，关掉才能连上。关闭会降低连接安全性。",
+        "stream": "流式输出",
+        "stream_hint": "模型逐字输出。个别网络下不稳定，默认关闭；关掉后回复仍会逐个浮现。",
+        "test_ok": "连接成功",
+        "test_fail": "连接失败"
+    }
+}

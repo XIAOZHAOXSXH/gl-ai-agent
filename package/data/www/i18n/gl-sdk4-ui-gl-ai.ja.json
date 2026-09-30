@@ -1,0 +1,32 @@
+{
+    "menu_gl_ai": "GL-AI アシスタント",
+    "gl_ai": {
+        "title": "GL-AI アシスタント",
+        "subtitle": "話すだけでルーターを設定",
+        "empty_title": "何を変えたいか教えてください",
+        "empty_desc": "WiFi、帯域制限、端末のブロック、遅延の原因調査 — 普通の言葉でどうぞ。",
+        "input_placeholder": "何を変更しますか？",
+        "send": "送信",
+        "stop": "停止",
+        "thinking": "考えています",
+        "risk_low": "読み取り専用",
+        "risk_medium": "確認が必要",
+        "risk_high": "高リスク",
+        "applied": "適用しました",
+        "rolled_back": "元に戻しました",
+        "confirm_apply": "変更を適用",
+        "confirm_cancel": "キャンセル",
+        "revert": "直前の変更を戻す",
+        "settings": "設定",
+        "history": "履歴",
+        "new_chat": "新しい会話",
+        "advanced": "Advanced",
+        "advanced_hint": "Leave these alone unless you need them",
+        "stream": "Stream tokens",
+        "stream_hint": "Ask the model to stream. Unstable on some networks, so it is off by default; replies still appear progressively without it.",
+        "test_fail": "Connection failed",
+        "test_ok": "Connected",
+        "verify_tls": "Verify TLS certificate",
+        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security."
+    }
+}

@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.pkgstage/
+.controlstage/
+.apkstage/
+.apkv2/
+.apkv2tree/
+.ipkwrap/
+*.tar.gz
+!.github/**
+
+# Test artifacts: screenshots, reports and page dumps from the browser checks
+artifacts/
+
+# Reference material pulled from other projects during the initial research.
+# Kept locally for consultation, not part of this project's source.
+research/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GL-AI bundle eval contract probe</title>
+<style>
+  body { font: 13px/1.6 ui-monospace, Consolas, monospace; margin: 0; padding: 16px;
+         background: #141427; color: #cdcee0; }
+  h1 { font-size: 15px; margin: 0 0 12px; color: #4ecce0; }
+  pre { background: #0a0a14; padding: 12px; border-radius: 8px; overflow: auto; white-space: pre-wrap; }
+  .ok { color: #00c8b5; }
+  .bad { color: #e04c7e; }
+  .warn { color: #f5a623; }
+</style>
+</head>
+<body>
+<h1>GL-AI view bundle — eval() contract probe</h1>
+<pre id="out">running…</pre>
+<script>
+(async () => {
+  const lines = [];
+  const push = (s, cls) => lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  const out = document.getElementById('out');
+  const render = () => { out.innerHTML = lines.join('\n'); };
+
+  // What does the page already provide that a bundle might rely on?
+  const globals = ['module', 'exports', 'require', 'define', 'Vue', 'window', 'globalThis'];
+  push('== globals present on a plain page ==');
+  for (const g of globals) {
+    let desc;
+    try { desc = g in window ? typeof window[g] : 'ABSENT'; } catch (e) { desc = 'ERR ' + e.message; }
+    push(`  ${g.padEnd(12)} ${desc}`, desc === 'ABSENT' ? 'warn' : 'ok');
+  }
+  render();
+
+  // Fetch the real bundle the way the SDK does.
+  let code = null;
+  try {
+    const r = await fetch('bundle.js?_t=' + Date.now());
+    code = await r.text();
+    push(`\n== fetched bundle ==\n  status=${r.status} bytes=${code.length}`, 'ok');
+  } catch (e) {
+    push(`\n== fetch failed: ${e.message}`, 'bad');
+    render();
+    return;
+  }
+  render();
+
+  // 1. Raw eval, exactly as the SDK does it.
+  push('\n== eval(code) with no shim (SDK behaviour) ==');
+  try {
+    const component = eval(code);
+    push(`  returned: ${typeof component}`, 'ok');
+    if (component && typeof component === 'object') {
+      const keys = Object.keys(component);
+      push(`  keys: ${keys.length ? keys.join(', ') : '(none)'}`);
+      push(`  name=${component.name} data=${typeof component.data} ` +
+           `render=${typeof component.render} methods=${typeof component.methods}`);
+    }
+  } catch (e) {
+    push(`  THREW: ${e.name}: ${e.message}`, 'bad');
+    push('  -> the SDK environment must supply a module/exports shim', 'warn');
+  }
+  render();
+
+  // 2. Same eval, but with a module shim in place (fallback strategy).
+  push('\n== eval(code) with a module shim ==');
+  window.module = { exports: {} };
+  try {
+    const component = eval(code);
+    push(`  returned: ${typeof component}`, 'ok');
+    push(`  name=${component && component.name} render=${typeof (component && component.render)} ` +
+         `methods=${typeof (component && component.methods)}`,
+         component && component.render ? 'ok' : 'bad');
+  } catch (e) {
+    push(`  THREW: ${e.name}: ${e.message}`, 'bad');
+  }
+  render();
+
+  // Machine-readable result for the automation harness.
+  const summary = {
+    hasModule: typeof window.module !== 'undefined',
+    bundleBytes: code.length,
+  };
+  const el = document.createElement('div');
+  el.id = 'summary';
+  el.textContent = JSON.stringify(summary);
+  el.style.display = 'none';
+  document.body.appendChild(el);
+})();
+</script>
+</body>
+</html>

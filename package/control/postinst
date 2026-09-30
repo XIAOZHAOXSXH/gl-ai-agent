@@ -1,0 +1,64 @@
+#!/bin/sh
+# GL-AI助手 post-install.
+#
+# Two jobs:
+#   1. make the view bundle loadable: the SDK fetches the *uncompressed* .js
+#      path, so the gzipped payload shipped in the package is expanded unless a
+#      plain file is already there.
+#   2. inject the bootstrap script into the stock admin page, idempotently and
+#      with a backup, so uninstall can restore it exactly.
+set -e
+
+PKG=gl-ai-agent
+LIBDIR=/usr/lib/lua/glai
+ETCDIR=/etc/$PKG
+VIEWDIR=/www/views
+I18NDIR=/www/i18n
+GLHOME=/www/gl_home.html
+ROMHOME=/rom$GLHOME
+
+# ---- 1. view bundle ------------------------------------------------------
+for v in gl-ai; do
+    gz="$VIEWDIR/gl-sdk4-ui-$v.common.js.gz"
+    js="$VIEWDIR/gl-sdk4-ui-$v.common.js"
+    if [ -f "$gz" ] && [ ! -f "$js" ]; then
+        if command -v gunzip >/dev/null 2>&1; then
+            gunzip -c "$gz" > "$js" && chmod 644 "$js"
+        else
+            # no gunzip: ship the plain file and let nginx's gzip_static cope
+            cp "$gz" "$js" && chmod 644 "$js"
+        fi
+    fi
+done
+
+# ---- 2. runtime state ----------------------------------------------------
+# The config holds the user's API key, so it is deliberately NOT shipped as a
+# conffile: opkg would then fingerprint and potentially re-prompt for a secret.
+# glai/config.lua creates it on first use with mode 0600 instead.
+mkdir -p "$ETCDIR/sessions"
+chmod 700 "$ETCDIR"
+
+# ---- 3. inject the bootstrap into the stock admin page -------------------
+BOOT=/www/js/$PKG-boot.js
+if [ -f "$GLHOME" ]; then
+    # Keep the pristine page so a future version can diff what it changed.
+    # Prefer /rom (untouched by any plugin); fall back to the current file.
+    if [ ! -f "$ETCDIR/gl_home.html.orig" ]; then
+        if [ -f "$ROMHOME" ]; then
+            cp "$ROMHOME" "$ETCDIR/gl_home.html.orig"
+        else
+            cp "$GLHOME" "$ETCDIR/gl_home.html.orig"
+        fi
+    fi
+    if ! grep -q "$PKG-boot" "$GLHOME" 2>/dev/null; then
+        # insert immediately before the SPA bundle so we run first
+        sed -i "s#<script src=\"/js/app\.#<script src=\"/js/$PKG-boot.js\"></script><script src=\"/js/app.#" "$GLHOME"
+    fi
+fi
+
+# ---- 4. reload the web tier ---------------------------------------------
+if [ -x /etc/init.d/nginx ]; then
+    nginx -t >/dev/null 2>&1 && /etc/init.d/nginx reload >/dev/null 2>&1 || true
+fi
+
+exit 0

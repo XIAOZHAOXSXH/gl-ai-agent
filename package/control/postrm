@@ -1,0 +1,43 @@
+#!/bin/sh
+# GL-AI助手 post-remove: leave no trace in the stock admin UI.
+#
+# Removal strips only our own <script> tag rather than restoring a whole-file
+# backup. That is deliberate: other plugins (glinjector and friends) inject
+# their own tags into the same page, and overwriting the file would silently
+# undo their work. A surgical removal restores the page to exactly the state
+# it had before we were installed, even in a crowded page.
+#
+# User data (config, sessions) survives by default; set KEEP_DATA= to purge.
+set -e
+
+PKG=gl-ai-agent
+ETCDIR=/etc/$PKG
+GLHOME=/www/gl_home.html
+
+# ---- remove only our tag -------------------------------------------------
+if [ -f "$GLHOME" ]; then
+    sed -i "s#<script src=\"/js/$PKG-boot.js\"></script>##g" "$GLHOME"
+fi
+
+# ---- drop generated assets ----------------------------------------------
+rm -f /www/views/gl-sdk4-ui-gl-ai.common.js
+rm -f /www/views/gl-sdk4-ui-gl-ai.common.js.gz
+rm -f /www/js/$PKG-boot.js
+rm -f /usr/lib/oui-httpd/rpc/gl_ai
+rm -f /usr/share/gl-validator.d/gl_ai.lua
+rm -f /etc/nginx/gl-conf.d/$PKG.conf
+rm -f /etc/nginx/conf.d/$PKG-main.conf
+
+# the pristine copy is only useful while installed
+rm -f "$ETCDIR/gl_home.html.orig"
+
+# ---- user data ----------------------------------------------------------
+if [ -z "$KEEP_DATA" ]; then
+    rm -rf "$ETCDIR"
+fi
+
+if [ -x /etc/init.d/nginx ]; then
+    nginx -t >/dev/null 2>&1 && /etc/init.d/nginx reload >/dev/null 2>&1 || true
+fi
+
+exit 0

@@ -1,0 +1,32 @@
+{
+    "menu_gl_ai": "GL-AI Assistant",
+    "gl_ai": {
+        "title": "GL-AI Assistant",
+        "subtitle": "Configure your router by just asking",
+        "empty_title": "Tell me what you want to change",
+        "empty_desc": "WiFi, bandwidth limits, blocking devices, chasing down lag — plain language is fine.",
+        "input_placeholder": "What would you like to change?",
+        "send": "Send",
+        "stop": "Stop",
+        "thinking": "Thinking",
+        "risk_low": "read-only",
+        "risk_medium": "needs confirm",
+        "risk_high": "high risk",
+        "applied": "Applied",
+        "rolled_back": "Rolled back",
+        "confirm_apply": "Apply changes",
+        "confirm_cancel": "Cancel",
+        "revert": "Undo last change",
+        "settings": "Settings",
+        "history": "History",
+        "new_chat": "New chat",
+        "advanced": "Advanced",
+        "advanced_hint": "Leave these alone unless you need them",
+        "verify_tls": "Verify TLS certificate",
+        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security.",
+        "stream": "Stream tokens",
+        "stream_hint": "Ask the model to stream. Unstable on some networks, so it is off by default; replies still appear progressively without it.",
+        "test_ok": "Connected",
+        "test_fail": "Connection failed"
+    }
+}

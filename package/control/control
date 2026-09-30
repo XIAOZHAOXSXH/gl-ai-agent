@@ -1,0 +1,12 @@
+Package: gl-ai-agent
+Version: 0.1.0
+Architecture: all
+Maintainer: GL-AI Agent contributors
+Section: utils
+Priority: optional
+Depends: libc, lua, uci, libubus-lua
+Description: GL-AI助手 - natural-language configuration agent for the native
+ GL.iNet SDK4 admin panel. Adds an AI assistant page that turns plain-language
+ requests into real router changes through the SDK's own RPC layer, with a
+ confirmation gate, change preview and audit journal. Injects a page into the
+ stock admin UI; does not touch LuCI.

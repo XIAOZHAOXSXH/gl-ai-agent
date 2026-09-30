@@ -1,0 +1,115 @@
+--[[
+  SDK4 RPC object: gl_ai
+
+  How oui.rpc treats this file (read from /usr/lib/lua/oui/rpc.lua):
+
+      local ok, tb = pcall(dofile, "/usr/lib/oui-httpd/rpc/" .. object)
+      ...
+      objects[object] = funs          -- module-level cache, kept forever
+
+  `objects` is an upvalue of the oui.rpc module, so the method table built on
+  the first request lives for the entire life of the nginx worker. Adding a
+  method here therefore does nothing until nginx restarts - and requiring a
+  restart to install or upgrade a plugin is not acceptable.
+
+  So this file exposes exactly one stable surface, `rpc`, and never grows new
+  top-level names. `rpc` loads the real implementation from disk on every call
+  and dispatches to it, which means:
+
+      * installing the package works immediately, no restart
+      * upgrading the Lua backend works immediately, no restart
+      * the exported method set here is frozen, so the cache can never go stale
+
+  The named methods below exist only so an already-warm worker (from a build
+  that used them) keeps working; the UI calls `rpc` for everything.
+
+  Wire format (the SDK wraps this as a JSON-RPC "call" to object `gl_ai`):
+      params[3] = "rpc"
+      params[4] = { m = "<method>", p = { ...args } }
+]]
+local IMPL = "/usr/lib/lua/glai/rpc_entry.lua"
+
+--- Drop cached copies of our own modules.
+--
+-- `loadfile` already bypasses the cache for rpc_entry.lua itself, but that file
+-- pulls in the rest of the backend with `require`, and Lua's package.loaded
+-- keeps those for the life of the nginx worker. Without this, installing an
+-- upgrade would keep executing the previous backend until nginx was restarted.
+-- Only our own `glai.*` namespace is touched; nothing else is affected.
+local function invalidate()
+    for name in pairs(package.loaded) do
+        if type(name) == "string" and name:sub(1, 5) == "glai." then
+            package.loaded[name] = nil
+        end
+    end
+end
+
+local function load_impl()
+    invalidate()
+    local chunk, err = loadfile(IMPL)
+    if not chunk then
+        ngx.log(ngx.ERR, "gl_ai: cannot load ", IMPL, ": ", tostring(err))
+        return nil, tostring(err)
+    end
+    local ok, mod = pcall(chunk)
+    if not ok then
+        ngx.log(ngx.ERR, "gl_ai: ", IMPL, " raised: ", tostring(mod))
+        return nil, tostring(mod)
+    end
+    if type(mod) ~= "table" then
+        ngx.log(ngx.ERR, "gl_ai: ", IMPL, " did not return a table")
+        return nil, "backend did not return a table"
+    end
+    return mod
+end
+
+--- Generic dispatch: always executes the newest code on disk.
+local function dispatch(args)
+    args = args or {}
+    local name = args.m
+    if type(name) ~= "string" or name == "" then
+        return { error = "missing_method" }
+    end
+
+    local mod, err = load_impl()
+    if not mod then
+        return { error = "backend_unavailable", detail = err }
+    end
+
+    local fn = mod[name]
+    if type(fn) ~= "function" then
+        return { error = "unknown_method", method = name }
+    end
+
+    -- Called WITHOUT pcall on purpose: the backend yields (ubus calls and
+    -- streaming HTTP), and Lua 5.1 forbids yielding across a pcall boundary.
+    -- Backend methods return their own error tables instead of raising.
+    return fn(args.p or {})
+end
+
+-- Probe once so a broken backend is diagnosable through get_config instead of
+-- failing every request with an opaque method-not-found.
+local probe_ok, probe_err = load_impl()
+
+if not probe_ok then
+    return {
+        rpc = function()
+            return { error = "backend_unavailable", detail = probe_err }
+        end,
+    }
+end
+
+local M = { rpc = dispatch }
+
+-- Legacy aliases, kept only for workers already holding the old method table.
+for _, name in ipairs({
+    "get_config", "set_config", "test_connection", "get_tools",
+    "get_capabilities", "list_sessions", "get_session", "delete_session",
+    "new_session", "approve", "cancel", "selftest",
+}) do
+    M[name] = function(args)
+        return dispatch({ m = name, p = args })
+    end
+end
+
+return M
