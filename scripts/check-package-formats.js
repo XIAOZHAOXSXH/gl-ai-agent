@@ -97,7 +97,15 @@ function makeApkv2() {
     return zlib.gzipSync(body);
 }
 
-/** APKv3: signature stream, then control stream, then data stream. */
+/**
+ * APKv3: signature stream, ADB control stream, tar data stream.
+ *
+ * Mirrors what apk-tools 3 actually emits. Two details are easy to get wrong and
+ * both are load-bearing for the checker:
+ *   - the control stream is ADB, NOT tar, so it cannot be read with a tar reader
+ *   - the data stream holds the tree directly (usr/..., www/...), without a
+ *     "data/" prefix
+ */
 function makeApkv3() {
     // The signature stream has no gzip magic; a short opaque record stands in
     // for the real APK signature so that offset 0 is genuinely non-gzip.
@@ -107,20 +115,18 @@ function makeApkv3() {
         Buffer.alloc(64, 0xab),
     ]);
 
-    const controlTar = tar([
-        ['debian-binary', '2.0\ncontrol\n'],
-        ['.PKGINFO', 'pkgname = gl-ai-agent\npkgver = 0.1.0-r1\narch = noarch\n'],
-        ['.post-install', '#!/bin/sh\nexit 0\n', 0o755],
-    ]);
-    const dataTar = tar([
-        ['debian-binary', '2.0\ndata\n'],
-        ...PAYLOAD.map(([n, c, m]) => ['data/' + n, c, m]),
-    ]);
+    // ADB stands in for apk's control stream: gzip'd, but not a tar.
+    const adbControl = zlib.gzipSync(Buffer.concat([
+        Buffer.from('2.0\n', 'ascii'),
+        Buffer.from('pkgname=gl-ai-agent\npkgver=0.1.0-r1\narch=noarch\n', 'ascii'),
+        Buffer.alloc(48, 0x7f),
+    ]));
 
-    // each stream is terminated by a 512-byte zero block, as apk writes them
+    const dataTar = tar(PAYLOAD);
+
     return Buffer.concat([
         sig,
-        zlib.gzipSync(controlTar), Buffer.alloc(BLOCK, 0),
+        adbControl, Buffer.alloc(BLOCK, 0),
         zlib.gzipSync(dataTar), Buffer.alloc(BLOCK, 0),
     ]);
 }

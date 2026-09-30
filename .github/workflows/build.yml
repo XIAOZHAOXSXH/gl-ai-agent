@@ -202,6 +202,14 @@ jobs:
       - name: Verify apk contents
         run: node scripts/check-package.js dist/*.apk
 
+      # CI is the only place a real apk-tools package exists, so when the checker
+      # cannot read one this prints the container's actual shape (segment
+      # offsets, stream ids, first entries) rather than leaving a bare failure to
+      # guess at.
+      - name: Dump apk container shape (diagnostic)
+        if: failure()
+        run: node scripts/inspect-apk.js dist/*.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: gl-ai-agent-apk
