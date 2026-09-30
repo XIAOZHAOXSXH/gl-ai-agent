@@ -264,10 +264,16 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pkgfmt-'));
 /** An installed tree, as apk-tools would leave one behind. */
 function installedTree() {
     const root = path.join(tmp, 'root');
-    for (const [n, c] of PAYLOAD) {
+    for (const [n, c, m] of PAYLOAD) {
         const p = path.join(root, n);
         fs.mkdirSync(path.dirname(p), { recursive: true });
         fs.writeFileSync(p, c);
+        // An install applies the modes the package recorded, and the checker
+        // asserts them on Linux. Without this the fixture would fail there while
+        // passing on Windows, where modes are read as unknown.
+        try {
+            fs.chmodSync(p, m || 0o644);
+        } catch (e) { /* Windows cannot; the checker treats modes as unknown */ }
     }
     return root;
 }
@@ -312,6 +318,20 @@ const cases = [
         extra: {
             name: 'partial-listing.txt',
             content: listing().split('\n').filter((l) => !l.includes('tools.lua')).join('\n'),
+        },
+        expectFail: true,
+    },
+    {
+        // The RPC object must arrive executable or the SDK will not load it: a
+        // package that installs cleanly and does nothing. The mode assertion is
+        // the only thing standing between that and a release, so it gets a case.
+        label: 'rpc object not executable (must FAIL)',
+        file: 'adb.apk',
+        buf: makeAdbApk(),
+        args: ['--apk-listing', path.join(tmp, 'noexec-listing.txt')],
+        extra: {
+            name: 'noexec-listing.txt',
+            content: listing().replace(/^755 (\d+) \.\/usr\/lib\/oui-httpd\/rpc\/gl_ai$/m, '644 $1 ./usr/lib/oui-httpd/rpc/gl_ai'),
         },
         expectFail: true,
     },

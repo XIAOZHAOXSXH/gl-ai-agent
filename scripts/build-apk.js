@@ -80,6 +80,15 @@ function stageData() {
     rmrf(STAGE);
     fs.mkdirSync(STAGE, { recursive: true });
     copyDir(DATA, path.join(STAGE, 'data'));
+
+    // The staged copy needs its modes set explicitly, and this is not cosmetic:
+    // `apk mkpkg` records whatever modes the files have on disk, `copyFileSync`
+    // does NOT preserve them (it creates the destination with 0666 & ~umask),
+    // and git stores the RPC object as 100644. Without this the package would
+    // install /usr/lib/oui-httpd/rpc/gl_ai as 0644 and the SDK would refuse to
+    // load it - which is a package that installs cleanly and does nothing.
+    applyModes(path.join(STAGE, 'data'), executable);
+
     fs.mkdirSync(path.join(STAGE, 'scripts'), { recursive: true });
     for (const [apkName, ipkName] of [
         ['post-install', 'postinst'],
