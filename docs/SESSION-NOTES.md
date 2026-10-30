@@ -19,6 +19,7 @@ root 密码不写进仓库，用 `GL_PASSWORD` 传入。此前一轮在 GL-MG130
 | 确认闸门 | `GL_API_KEY=… node scripts/verify-approval.js` | **7/7** |
 | 作者署名徽章 | `GL_PASSWORD=… node scripts/verify-ui.js` | `authorChecks` 七项全 true：徽章可见、文本含「小赵先生」、href 指向仓库、`_blank`+`noopener`、底部弱化行同样成立、无横向溢出；另用浏览器点过两处链接，新标签确实落在仓库页 |
 | 打包 | `build-ipk.js` / `build-apk.js` / `check-package.js` | ipk 与 apk 均 **RESULT: OK**；`opkg install --force-reinstall` 后 md5 与本地构建一致 |
+| 发布 | `.github/workflows/build.yml` 的 `release` job | `main` 推送 / `v*` 标签 / 手动 dispatch 都会把 **ipk + apk 一起**发到 Releases（见下） |
 | Lint | `lint-shell.js` / `lint-lua.js` | shell 51 文件 0 问题；Lua 需本机或 CI 装 lua5.1 |
 
 真实对话示例（`deepseek-flash`，网关 `https://api.moleapi.com/v1`）：
@@ -143,6 +144,18 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
   `api.github.com/repos/XIAOZHAOXSXH/gl-ai-agent/actions/runs?per_page=1` → `/jobs` → `check_run_url` → `/annotations`。
   所以失败原因都用 `::error::` 打印成 annotation，而不是只写进日志/摘要。
   annotation 的正文比日志视图长得多，把 `tail -25 日志` 压成一行塞进去是有效的排障手段。
+
+### 发布（Release）
+
+- **发布由单独的 `release` job 负责**，不再挂在 ipk/apk 两个构建 job 里：那两个 job 并行跑，
+  各自 `gh release create` 会互相抢着建同一个 release；而且原来的 `if:` 只认 tag/dispatch，
+  于是 `main` 上推了几十次、包里明明有产物，Releases 页面却一直是空的（实测：`/releases` 返回空数组）。
+- 现在：`needs: [ipk, apk]` → `download-artifact` 把两边的包收进 `dist/` →
+  **一次** `gh release create`（不存在时）或 `upload --clobber` + `edit --notes-file`（已存在时）。
+- 触发与 tag 规则：`main` 推送 / `v*` 标签 / 手动 dispatch；tag 取 `输入 tag → 推送的 tag → v<package.json 版本>`，
+  所以**不打标签也会持续刷新当前版本那个 release**，不用手动操作；别的分支和 PR 只构建不发布。
+- 该 shell 逻辑用设备上的 BusyBox ash + 假 `gh`/`node` 做过四种场景的干跑（新建 / 已存在 / 标签 / dispatch+prerelease），
+  `sh -n` 也过；`scripts/check-workflow-shell.js` 会把 workflow 里所有 `run:` 块一起做语法检查。
 
 ### 其它
 

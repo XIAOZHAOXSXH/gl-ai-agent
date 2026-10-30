@@ -2,12 +2,17 @@ name: build
 
 # Builds both package formats and publishes them to a GitHub Release.
 #
-#   push to any branch      -> build + upload workflow artifacts (no release)
-#   push a tag like v0.1.0  -> build + publish a Release named after the tag
+#   push to main            -> build + publish/refresh the release for the version
+#                              in package.json (both assets replaced each time)
+#   push a tag like v0.1.0  -> build + publish a release named after the tag
 #   manual dispatch         -> optional tag override, optional prerelease flag
+#   push to another branch  -> build only; packages stay attached to the run
+#   pull request            -> build only
 #
-# Two jobs because the formats need different toolchains: .ipk is assembled with
-# Node alone, while .apk wants apk-tools v3, which ships in Alpine 3.23+.
+# Two build jobs because the formats need different toolchains: .ipk is assembled
+# with Node alone, while .apk wants apk-tools v3, which ships in Alpine 3.23+.
+# They run in parallel, and a third job collects both and owns the Release, so
+# the two formats cannot race each other while creating it.
 
 on:
   push:
@@ -117,32 +122,6 @@ jobs:
           name: gl-ai-agent-ipk
           path: dist/*.ipk
           if-no-files-found: error
-
-      - name: Publish to Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.rel.outputs.tag }}
-          PRE: ${{ github.event.inputs.prerelease }}
-        run: |
-          set -eu
-          notes="GL-AI助手 $(basename "$TAG")
-
-          Built from ${GITHUB_SHA}.
-
-          **Install (OpenWrt 21-22 / GL.iNet firmware 3.x-4.x, opkg)**
-          \`\`\`
-          opkg install gl-ai-agent_*_all.ipk
-          \`\`\`
-          Then open the router admin panel and pick **系统 -> GL-AI助手**.
-          Configure your model API on that page; nothing else is required."
-          if [ "${PRE:-false}" = "true" ]; then flag="--prerelease"; else flag=""; fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.ipk --clobber
-          else
-            gh release create "$TAG" dist/*.ipk --target "$GITHUB_SHA" \
-              --title "$TAG" --notes "$notes" ${flag:-}
-          fi
 
   # ---------------------------------------------------------------------------
   # .apk for OpenWrt 24.10+ (apk-tools v3)
@@ -283,29 +262,106 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-      - name: Publish to Release
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.rel.outputs.tag }}
-          PRE: ${{ github.event.inputs.prerelease }}
+  # ---------------------------------------------------------------------------
+  # Release: both formats, published once
+  #
+  # The build jobs run in parallel and used to publish independently, which meant
+  # two `gh release create` calls raced and, before that, that a plain push to
+  # main produced no release at all - the packages only ever existed as run
+  # artifacts. Publishing lives here instead: it waits for both builds, then
+  # creates or refreshes one release holding the ipk and the apk together.
+  # ---------------------------------------------------------------------------
+  release:
+    name: release (ipk + apk)
+    needs: [ipk, apk]
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect the packages
         run: |
           set -eu
-          git config --global --add safe.directory '*'
-          notes="GL-AI助手 $(basename "$TAG") — apk build
+          mkdir -p dist
+          find artifacts -name '*.ipk' -exec cp {} dist/ \;
+          find artifacts -name '*.apk' -exec cp {} dist/ \;
+          ls -l dist
+          test -n "$(ls dist/*.ipk)" || { echo 'no ipk in the artifacts'; exit 1; }
+          test -n "$(ls dist/*.apk)" || { echo 'no apk in the artifacts'; exit 1; }
 
-          Built from ${GITHUB_SHA} with apk-tools v3.
-
-          **Install (OpenWrt 24.10+, apk)**
-          \`\`\`
-          apk add --allow-untrusted gl-ai-agent-*.apk
-          \`\`\`
-          Then open the router admin panel and pick **系统 -> GL-AI助手**."
-          if [ "${PRE:-false}" = "true" ]; then flag="--prerelease"; else flag=""; fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.apk --clobber
+      - name: Publish to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -eu
+          # Release tag: an explicit dispatch input wins, then a pushed tag, and
+          # otherwise the version in package.json - so a plain push to main keeps
+          # refreshing one release instead of needing a tag by hand.
+          if [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
           else
-            gh release create "$TAG" dist/*.apk --target "$GITHUB_SHA" \
-              --title "$TAG" --notes "$notes" ${flag:-} \
-              || gh release upload "$TAG" dist/*.apk --clobber
+            tag="v$(node -p "require('./package.json').version")"
           fi
+          ipk=$(basename "$(ls dist/*.ipk | head -1)")
+          apk=$(basename "$(ls dist/*.apk | head -1)")
+          echo "tag: $tag"
+          echo "ipk: $ipk"
+          echo "apk: $apk"
+
+          notes=dist/RELEASE_NOTES.md
+          {
+            echo "## GL-AI助手 $tag"
+            echo
+            echo "在原生 GL.iNet（SDK4）管理面板里用一句话配置路由器 —— 不改 LuCI，不破坏原界面。"
+            echo "Natural-language configuration for GL.iNet routers, injected into the stock admin UI and acted through the router's own RPC layer."
+            echo
+            echo "Built from \`${GITHUB_SHA}\` on $(date -u +%Y-%m-%d)."
+            echo
+            echo "| 文件 | 适用固件 |"
+            echo "|---|---|"
+            echo "| \`$ipk\` | GL.iNet 固件 4.x / OpenWrt 21.02–22.03（opkg） |"
+            echo "| \`$apk\` | OpenWrt 24.10+ / 25.x（apk-tools v3） |"
+            echo
+            echo '**安装 ipk（opkg）**'
+            echo
+            echo '```sh'
+            echo "opkg install $ipk"
+            echo '```'
+            echo
+            echo '**安装 apk（apk-tools v3）**'
+            echo
+            echo '```sh'
+            echo "apk add --allow-untrusted $apk"
+            echo '```'
+            echo
+            echo '装好后打开管理面板 **系统 → GL-AI助手**，在页面上填模型 API 即可；'
+            echo '写操作默认走「询问模式」，每次改动都会先弹出确认卡。'
+          } > "$notes"
+
+          if [ "${PRERELEASE:-false}" = "true" ]; then pre="--prerelease"; else pre=""; fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.ipk dist/*.apk --clobber
+            gh release edit "$tag" --title "GL-AI助手 $tag" --notes-file "$notes"
+          else
+            gh release create "$tag" dist/*.ipk dist/*.apk \
+              --target "$GITHUB_SHA" \
+              --title "GL-AI助手 $tag" \
+              --notes-file "$notes" ${pre:-}
+          fi
+
+          echo '--- assets on the release ---'
+          gh release view "$tag" --json tagName,url,assets \
+            -q '"\(.tagName)  \(.url)", (.assets[] | "  \(.name)  \(.size) bytes")'
+          gh release view "$tag" --json url -q '.url' >> "$GITHUB_STEP_SUMMARY"

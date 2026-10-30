@@ -76,6 +76,20 @@ Agent 不允许模型直接执行 Shell 命令。模型只能从注册工具中�
 
 ## 安装
 
+### 下载现成的包
+
+每次 CI 构建完成后，两种包会一起发到 [Releases](https://github.com/XIAOZHAOXSXH/gl-ai-agent/releases)：
+`main` 上的每次推送都会刷新当前版本（`package.json` 里的版本）的那个 release，资产文件名带版本号、内容每次覆盖；
+打 `v*` 标签则生成对应的版本 release。
+
+```sh
+# 路由器上直接下（文件名带版本号，按 Releases 页里的实际名字替换）
+wget -O /tmp/gl-ai-agent.ipk \
+  https://github.com/XIAOZHAOXSXH/gl-ai-agent/releases/latest/download/gl-ai-agent_0.1.0_all.ipk
+```
+
+也可以在浏览器里打开 Releases 页手动下载后传到路由器 `/tmp`。
+
 ### OpenWrt 21/22、GL 4.x：`opkg` / `.ipk`
 
 当前 GL-MT3000 测试设备属于这一类，使用：
