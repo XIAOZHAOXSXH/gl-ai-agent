@@ -15,7 +15,8 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const HOST = process.env.GL_HOST || '192.168.8.1';
-const PASS = process.env.GL_PASSWORD || 'Test@2026888';
+const PASS = process.env.GL_PASSWORD;
+if (!PASS) throw new Error('GL_PASSWORD is required for approval verification');
 const API_KEY = process.env.GL_API_KEY || '';
 const OUT = path.resolve(__dirname, '../artifacts');
 const PROXY = process.env.GL_PROXY || 'http://127.0.0.1:7890';

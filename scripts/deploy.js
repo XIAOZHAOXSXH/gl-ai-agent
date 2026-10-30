@@ -4,10 +4,8 @@
  * This is the fast iteration loop (direct file push). End users install the
  * .ipk / .apk instead, which performs the same steps via postinst.
  *
- * Deliberately does NOT restart nginx: the RPC object is loaded fresh from disk
- * per request, the view bundle and i18n files are static, and the menu entry is
- * read per request by ui.get_menu_list. Only the gl_home.html injection needs a
- * browser reload, not a server action.
+ * Reloads nginx after deployment so SDK4 refreshes its menu/i18n registry. The
+ * reload is configuration-checked and does not restart the process abruptly.
  *
  *   node scripts/deploy.js
  *   node scripts/deploy.js --uninstall
@@ -22,7 +20,8 @@ const DATA = path.join(ROOT, 'package/data');
 
 const HOST = process.env.GL_HOST || '192.168.8.1';
 const USER = process.env.GL_USER || 'root';
-const PASS = process.env.GL_PASSWORD || 'Test@2026888';
+const PASS = process.env.GL_PASSWORD;
+if (!PASS) throw new Error('GL_PASSWORD is required for device deployment');
 const HOSTKEY =
     process.env.GL_HOSTKEY ||
     'SHA256:4lMbv4crd0mR02ngHvJcRTtZBCy1Qw6uhvrPVypE7YI';
@@ -83,6 +82,7 @@ function deploy() {
         [
             'mkdir -p /usr/lib/lua/glai /usr/share/gl-validator.d',
             'mkdir -p /usr/share/oui/menu.d /www/views /www/i18n /www/js',
+            'mkdir -p /usr/share/gl-ai-agent/skills',
             'mkdir -p /etc/gl-ai-agent/sessions',
         ].join('; ')
     );
@@ -93,6 +93,7 @@ function deploy() {
     }
     scp(path.join(DATA, 'usr/lib/oui-httpd/rpc/gl_ai'), '/usr/lib/oui-httpd/rpc/gl_ai');
     scp(path.join(DATA, 'usr/share/gl-validator.d/gl_ai.lua'), '/usr/share/gl-validator.d/gl_ai.lua');
+    scp(path.join(DATA, 'usr/share/gl-ai-agent/skills/gl-router.md'), '/usr/share/gl-ai-agent/skills/gl-router.md');
 
     console.log('uploading UI');
     scp(bundleBase, `/www/views/gl-sdk4-ui-${VIEW}.common.js`);
@@ -115,6 +116,7 @@ function deploy() {
                 // inject the bootstrap before the SPA bundle, idempotently
                 `grep -q '${PKG}-boot' /www/gl_home.html 2>/dev/null || ` +
                     `sed -i 's#<script src="/js/app\\.#<script src="/js/${PKG}-boot.js"></script><script src="/js/app.#' /www/gl_home.html`,
+                'nginx -t >/dev/null 2>&1 && /etc/init.d/nginx reload >/dev/null 2>&1 || true',
                 `echo -n "  view:      "; curl -s -o /dev/null -w "%{http_code}\\n" http://127.0.0.1/views/gl-sdk4-ui-${VIEW}.common.js`,
                 `echo -n "  boot js:   "; curl -s -o /dev/null -w "%{http_code}\\n" http://127.0.0.1/js/${PKG}-boot.js`,
                 `echo -n "  injection: "; grep -c '${PKG}-boot' /www/gl_home.html`,
@@ -137,7 +139,7 @@ function uninstall() {
                 `rm -f /www/i18n/gl-sdk4-ui-${VIEW}.*.json`,
                 'rm -f /usr/lib/oui-httpd/rpc/gl_ai',
                 'rm -f /usr/share/gl-validator.d/gl_ai.lua',
-                'rm -rf /usr/lib/lua/glai /etc/gl-ai-agent',
+                'rm -rf /usr/lib/lua/glai /usr/share/gl-ai-agent /etc/gl-ai-agent',
                 'echo -n "  injection left: "; grep -c "gl-ai-agent-boot" /www/gl_home.html || true',
                 'echo -n "  view left:      "; ls /www/views/gl-sdk4-ui-gl-ai.common.js 2>/dev/null | wc -l',
                 'echo -n "  menu left:      "; ls /usr/share/oui/menu.d/gl-ai.json 2>/dev/null | wc -l',

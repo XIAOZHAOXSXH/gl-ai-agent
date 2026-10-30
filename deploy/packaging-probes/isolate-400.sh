@@ -1,6 +1,6 @@
 #!/bin/sh
 # Isolate which request attribute the upstream gateway rejects.
-KEY='sk-vACd7jPqzXIQohymNxsJbJJc9LEVZ0Fz7LgPJCuu7huSlkck'
+KEY=${GL_API_KEY:?set GL_API_KEY before running this probe}
 URL='https://api.moleapi.com/v1/chat/completions'
 M='gpt-5.6-luna'
 

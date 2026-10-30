@@ -11,7 +11,7 @@ const { chromium } = require('playwright');
 
 const ROOT = path.resolve(__dirname, '..');
 const BUNDLE = path.join(ROOT, 'package/data/www/views/gl-sdk4-ui-gl-ai.common.js');
-const PAGE = path.join(ROOT, 'deploy/probe/eval-contract.html');
+const PAGE = path.join(ROOT, 'deploy/packaging-probes/eval-contract.html');
 const PORT = Number(process.env.PROBE_PORT || 8899);
 
 function findBrowser() {

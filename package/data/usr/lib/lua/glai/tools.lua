@@ -137,7 +137,7 @@ M.registry = {
         name = "wifi_scan",
         group = "wireless",
         risk = "low",
-        desc = "Scan neighbouring access points and report SSID, signal strength, channel and band. Use this before recommending a channel. Takes 5-10 seconds.",
+        desc = "Report saved upstream networks. This does not perform a live RF scan; use the Wireless page for a live scan before recommending a channel.",
         params = {},
         run = function()
             local saved = rpc.call("repeater", "get_saved_ap_list", {}) or { res = {} }
@@ -184,7 +184,8 @@ M.registry = {
             online_only = { type = "boolean", desc = "Return only currently connected devices. Default false." },
         },
         run = function(args)
-            local list = rpc.call("clients", "get_list", {}) or {}
+            local list, list_err = rpc.call("clients", "get_list", {})
+            if not list then return nil, list_err end
             local out = {}
             for _, c in ipairs(list.clients or {}) do
                 if (not args.online_only) or c.online then
@@ -359,8 +360,20 @@ M.registry = {
         },
         run = function(args)
             local mac = tostring(args.mac or ""):upper()
-            local rx = tonumber(args.limit_rx_kbps) or 0
-            local tx = tonumber(args.limit_tx_kbps) or 0
+            local current, current_err = rpc.call("clients", "get_list", {})
+            if not current then return nil, current_err end
+            local existing
+            for _, c in ipairs(current.clients or {}) do
+                if tostring(c.mac or ""):upper() == tostring(args.mac or ""):upper() then
+                    existing = c
+                    break
+                end
+            end
+            if not existing then return nil, "client not found" end
+            local rx = (args.limit_rx_kbps ~= nil) and tonumber(args.limit_rx_kbps)
+                or tonumber(existing.limit_rx) or 0
+            local tx = (args.limit_tx_kbps ~= nil) and tonumber(args.limit_tx_kbps)
+                or tonumber(existing.limit_tx) or 0
             local res, err = rpc.call("clients", "set_info", {
                 mac = mac,
                 limit_rx = rx,
@@ -392,7 +405,7 @@ M.registry = {
     {
         name = "add_port_forward",
         group = "network",
-        risk = "medium",
+        risk = "high",
         reversible = true,
         desc = "Expose a service on an internal host to the internet. Allowed only for ports that do not conflict with the router's own management ports.",
         params = {
@@ -447,7 +460,8 @@ M.registry = {
             ping = { type = "boolean", desc = "Respond to WAN ping." },
         },
         run = function(args)
-            local current = rpc.call("firewall", "get_wan_access", {}) or {}
+            local current, current_err = rpc.call("firewall", "get_wan_access", {})
+            if not current then return nil, current_err end
             local payload = {
                 enable_ssh = (args.ssh ~= nil) and args.ssh or current.enable_ssh,
                 enable_https = (args.https ~= nil) and args.https or current.enable_https,
@@ -551,6 +565,11 @@ end
 --- Validate model-supplied arguments against the declared schema.
 function M.validate(tool, args)
     args = args or {}
+    for pname in pairs(args) do
+        if not (tool.params or {})[pname] then
+            return nil, "unknown parameter '" .. tostring(pname) .. "'"
+        end
+    end
     for pname, spec in pairs(tool.params or {}) do
         local v = args[pname]
         if v == nil then

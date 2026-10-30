@@ -35,10 +35,15 @@ local function read_json(path)
 end
 
 local function write_json(path, value)
-    local f = io.open(path, "w")
+    local tmp = path .. ".tmp." .. tostring(math.random(100000, 999999))
+    local f = io.open(tmp, "w")
     if not f then return false end
     f:write(cjson.encode(value))
     f:close()
+    if not os.rename(tmp, path) then
+        os.remove(tmp)
+        return false
+    end
     return true
 end
 
@@ -92,11 +97,13 @@ end
 function M.list()
     ensure_dir()
     local out = {}
+    local files = {}
     local p = io.popen("ls -1t " .. M.DIR .. "/*.json 2>/dev/null")
     if p then
         for line in p:lines() do
             local id = line:match("([^/]+)%.json$")
             if id then
+                files[#files + 1] = line
                 local s = read_json(line)
                 if s then
                     table.insert(out, {
@@ -110,6 +117,7 @@ function M.list()
         end
         p:close()
     end
+    for i = MAX_SESSIONS + 1, #files do os.remove(files[i]) end
     return out
 end
 

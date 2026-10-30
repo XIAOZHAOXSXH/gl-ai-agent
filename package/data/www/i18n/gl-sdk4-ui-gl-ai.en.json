@@ -1,4 +1,5 @@
 {
+    "menu_gl-ai": "GL-AI Assistant",
     "menu_gl_ai": "GL-AI Assistant",
     "gl_ai": {
         "title": "GL-AI Assistant",
@@ -27,6 +28,8 @@
         "stream": "Stream tokens",
         "stream_hint": "Ask the model to stream. Unstable on some networks, so it is off by default; replies still appear progressively without it.",
         "test_ok": "Connected",
-        "test_fail": "Connection failed"
+        "test_fail": "Connection failed",
+        "author_label": "Author: ",
+        "author_hint": "Open this project on GitHub"
     }
 }

@@ -16,7 +16,8 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const HOST = process.env.GL_HOST || '192.168.8.1';
-const PASS = process.env.GL_PASSWORD || 'Test@2026888';
+const PASS = process.env.GL_PASSWORD;
+if (!PASS) throw new Error('GL_PASSWORD is required for E2E verification');
 const OUT = path.resolve(__dirname, '../artifacts');
 const PROXY = process.env.GL_PROXY || 'http://127.0.0.1:7890';
 const NO_PROXY = '127.0.0.1,localhost,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12';

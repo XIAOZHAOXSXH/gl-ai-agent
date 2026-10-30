@@ -117,6 +117,10 @@ const PAYLOAD = [
     ['usr/lib/oui-httpd/rpc/gl_ai', 'return {}\n', 0o755],
     ['usr/share/oui/menu.d/gl-ai.json', '{}\n'],
     ['usr/share/gl-validator.d/gl_ai.lua', 'return {}\n'],
+    // the agent's own playbook: required by check-package.js, so it has to be
+    // part of every fixture or all of them fail for a reason unrelated to the
+    // container format they exist to test
+    ['usr/share/gl-ai-agent/skills/gl-router.md', '# router\n'],
     ['www/js/gl-ai-agent-boot.js', '\n'],
     ['www/views/gl-sdk4-ui-gl-ai.common.js', '\n'],
     ['www/views/gl-sdk4-ui-gl-ai.common.js.gz', Buffer.from([0x1f, 0x8b, 0, 0])],

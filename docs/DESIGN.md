@@ -225,6 +225,22 @@
 └──────────┴──────────────────────────────────────────────────┘
 ```
 
+### 5.2.1 作者署名（常驻可见）
+
+页面左上角、标题与副标题之下常驻一枚署名徽章：**「作者：小赵先生」**，点击后在新标签页打开
+仓库 <https://github.com/XIAOZHAOXSXH/gl-ai-agent>。底部状态栏右侧再用弱化样式重复一次
+（`当前为「询问模式」· … · 作者：小赵先生`），保证视线在输入区时也能看到出处。
+
+实现要点：
+
+- 表面处理与右侧齿轮/新会话按钮一致（`--background-card` + `1px --divider` 边框、999px 圆角），
+  所以它属于原生 chrome，而不是贴上去的标签；hover 才切到 `--primary` 强调色，箭头
+  `translate(1.5px,-1.5px)` 轻微上移；
+- 颜色**只用令牌**，default / dark / classic 三种主题自动适配，零硬编码色值；
+- 名字与仓库 URL 是常量（`src/ui/GlAiView.vue` 里的 `REPO_URL` / `AUTHOR_NAME`），不随语言翻译；
+  只有「作者：」这个标签与 tooltip 走 i18n（`gl_ai.author_label` / `gl_ai.author_hint`，7 种语言）；
+- `target="_blank" rel="noopener noreferrer"`；键盘可达并带 2px `--primary` 焦点环。
+
 ### 5.3 动画与交互细节（"丝滑"落到具体参数）
 
 | 元素 | 规格 |
@@ -252,7 +268,7 @@
 
 **示例 A：一句话改双频 WiFi**
 ```
-用户：帮我把 WiFi 密码改成 Test@2026888，2.4G 和 5G 都改，别的别动
+用户：帮我把 WiFi 密码改成 <new-password>，2.4G 和 5G 都改，别的别动
 
 Agent：▸ 读取 WiFi 状态（0.8s）
        当前：2.4G「GL-MG1300-5c1」WPA2·信道6 / 5G「GL-MG1300-5c1-5G」WPA2·信道149

@@ -1,4 +1,5 @@
 {
+    "menu_gl-ai": "GL-AI アシスタント",
     "menu_gl_ai": "GL-AI アシスタント",
     "gl_ai": {
         "title": "GL-AI アシスタント",
@@ -27,6 +28,8 @@
         "test_fail": "Connection failed",
         "test_ok": "Connected",
         "verify_tls": "Verify TLS certificate",
-        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security."
+        "verify_tls_hint": "Guest and hotel networks often intercept TLS with a self-signed certificate. Turning this off is what lets the router connect there. It lowers connection security.",
+        "author_label": "作者：",
+        "author_hint": "GitHub でこのプロジェクトを見る"
     }
 }

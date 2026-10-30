@@ -44,10 +44,18 @@ local WORKING_DIR = DIR .. "/working"
 local APPROVALS = DIR .. "/approvals.json"
 local AWAITING_DIR = DIR .. "/awaiting"
 local DECIDED_DIR = DIR .. "/decided"
+local CANCEL_DIR = DIR .. "/cancelled"
+-- Lua local scope starts at the declaration. The approval lock's stale-holder
+-- path calls this helper before its implementation appears below.
+local read_claim
 
 local function ensure_dirs()
     os.execute("mkdir -p " .. DIR .. " " .. STATE_DIR .. " " .. CLAIM_DIR
-        .. " " .. WORKING_DIR .. " " .. AWAITING_DIR .. " " .. DECIDED_DIR)
+        .. " " .. WORKING_DIR .. " " .. AWAITING_DIR .. " " .. DECIDED_DIR
+        .. " " .. CANCEL_DIR)
+    os.execute("chmod 700 " .. DIR .. " " .. STATE_DIR .. " " .. CLAIM_DIR
+        .. " " .. WORKING_DIR .. " " .. AWAITING_DIR .. " " .. DECIDED_DIR
+        .. " " .. CANCEL_DIR)
 end
 
 --- How long a confirmation may sit unanswered before it counts as expired.
@@ -146,7 +154,7 @@ function M.ask_approval(emit, tool, args, turn_id, timeout)
     if path_ok(turn_id) then
         local f = io.open(AWAITING_DIR .. "/" .. turn_id, "w")
         if f then
-            f:write(id)
+            f:write(id, "\n", tostring(os.time() + (tonumber(timeout) or 45)))
             f:close()
         end
     end
@@ -251,7 +259,12 @@ function M.approval_verdict(id)
     if v == nil then return "expired" end
     if v == "pending" then
         local f = io.open(AWAITING_DIR .. "/" .. (id:match("^(.*)%-%d+$") or id), "r")
-        if f then f:close() end
+        if f then
+            f:read("*l")
+            local expires = tonumber(f:read("*l"))
+            f:close()
+            if expires and os.time() >= expires then return "expired" end
+        end
         -- age is encoded in the id's leading timestamp
         local y, mo, d, h, mi, s = id:match(
             "^(%d%d%d%d)(%d%d)(%d%d)%-(%d%d)(%d%d)(%d%d)")
@@ -351,6 +364,28 @@ function M.clear_decided(turn_id)
     os.remove(DECIDED_DIR .. "/" .. turn_id)
 end
 
+function M.cancel(turn_id)
+    if not path_ok(turn_id) then return false end
+    ensure_dirs()
+    local f = io.open(CANCEL_DIR .. "/" .. turn_id, "w")
+    if not f then return false end
+    f:write("cancelled\n")
+    f:close()
+    return true
+end
+
+function M.is_cancelled(turn_id)
+    if not path_ok(turn_id) then return false end
+    local f = io.open(CANCEL_DIR .. "/" .. turn_id, "r")
+    if not f then return false end
+    f:close()
+    return true
+end
+
+function M.clear_cancelled(turn_id)
+    if path_ok(turn_id) then os.remove(CANCEL_DIR .. "/" .. turn_id) end
+end
+
 -- ---------------------------------------------------------------------------
 -- turn state
 -- ---------------------------------------------------------------------------
@@ -379,6 +414,7 @@ end
 function M.start(req)
     local text = tostring(req.text or "")
     if text == "" then return nil, "text is required" end
+    if #text > 12000 then return nil, "text is too long (maximum 12000 bytes)" end
 
     -- Clear approvals left over from turns that no longer exist. They cannot be
     -- acted on and the UI has no card for them, so keeping them would only
@@ -405,7 +441,9 @@ function M.start(req)
         text = text,
         step = 0,
         messages = sess.messages,
-        permission = req.permission or cfg.agent.permission,
+        -- Permission is a server-side policy. A caller cannot elevate a turn by
+        -- sending permission=auto over the authenticated RPC bus.
+        permission = cfg.agent.permission,
         confirm_timeout = tonumber(cfg.agent.confirm_timeout) or 45,
         max_steps = tonumber(cfg.agent.max_steps) or 8,
         started = os.time(),
@@ -447,12 +485,15 @@ local function advance(state)
     -- A step is already part-way through (its model call is done and it is
     -- working through tool calls): continue it.
     if state.pending then
-        local rec, done = agent.step_pending(state.pending, state.messages, emit, {
+        local pending_opts = {
             permission = state.permission,
             turn_id = state.turn_id,
             confirm_timeout = state.confirm_timeout,
             declined = state.declined,
-        })
+            redact_ctx = state.redact_ctx,
+        }
+        local rec, done = agent.step_pending(state.pending, state.messages, emit, pending_opts)
+        state.redact_ctx = pending_opts.redact_ctx or (rec and rec.ctx) or state.redact_ctx
         state.pending = rec
         state.awaiting = rec and rec.awaiting or nil
         trace(state.turn_id, "pending-step done=%s rec=%s awaiting=%s",
@@ -481,13 +522,16 @@ local function advance(state)
     state.step = state.step + 1
     emit({ type = "step", index = state.step, phase = "thinking" })
 
-    local rec, done = agent.step_begin(state.messages, state.text, emit, {
+    local step_opts = {
         permission = state.permission,
         turn_id = state.turn_id,
         confirm_timeout = state.confirm_timeout,
         first = (state.step == 1),
         declined = state.declined,
-    })
+        redact_ctx = state.redact_ctx,
+    }
+    local rec, done = agent.step_begin(state.messages, state.text, emit, step_opts)
+    state.redact_ctx = step_opts.redact_ctx or (rec and rec.ctx) or state.redact_ctx
     state.pending = rec
     state.awaiting = rec and rec.awaiting or nil
 
@@ -501,7 +545,7 @@ end
 local CLAIM_TTL = 200
 
 --- What has been claimed, and when (epoch seconds), or nil.
-local function read_claim(turn_id)
+read_claim = function(turn_id)
     local path = CLAIM_DIR .. "/" .. turn_id
     -- the claim is a symlink whose target is the timestamp
     local p = io.popen("readlink '" .. path .. "' 2>/dev/null")
@@ -643,6 +687,24 @@ function M.poll(turn_id, offset)
         events.append(turn_id, { type = "saved" })
         local l2, o2 = events.read(turn_id, offset)
         return { events = l2, offset = o2, finished = true }
+    end
+
+    if M.is_cancelled(turn_id) then
+        events.append(turn_id, { type = "done", reason = "cancelled" })
+        events.append(turn_id, { type = "saved", session_id = state.session_id })
+        local sess = session.load(state.session_id)
+        if sess then
+            sess.messages = state.messages
+            session.save(sess)
+        end
+        os.remove(state_path(turn_id))
+        M.clear_awaiting(turn_id)
+        M.clear_decided(turn_id)
+        M.clear_cancelled(turn_id)
+        clear_working(turn_id)
+        release(turn_id)
+        local lc, oc = events.read(turn_id, offset)
+        return { events = lc, offset = oc, finished = true }
     end
 
     -- The user already refused the pending change: end the turn now.

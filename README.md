@@ -1,178 +1,207 @@
-# GL-AI助手 (gl-ai-agent)
+# GL-AI Agent
 
-自然语言配置 **GL.iNet 路由器**的 AI Agent，注入 GL 固件**原生管理界面**（SDK4，非 LuCI）。
-用一句话说人话就能改 WiFi、限速、拉黑设备、排查卡顿 —— 由你自配的大模型 API 驱动。
+> 在 GL.iNet 原生管理界面中，通过自然语言配置、诊断和维护路由器。
 
-> 页面名称：**GL-AI助手** ｜ 安装形态：**ipk / apk** ｜ 不依赖 LuCI、不新增端口、不改 nginx 配置
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![UI](https://img.shields.io/badge/UI-GL.iNet%20SDK4-16a085.svg)](https://docs.gl-inet.cn/router/4/)
+[![Platform](https://img.shields.io/badge/platform-OpenWrt%2021%2B-2c3e50.svg)](https://openwrt.org/)
 
----
+**作者：** [小赵先生](https://github.com/XIAOZHAOXSXH/gl-ai-agent)
 
-## 它长什么样
+GL-AI Agent 是一个面向 GL.iNet 路由器的原生 UI 插件。它不依赖 LuCI，不新增独立 Web 端口，通过 GL SDK4 的菜单、视图、RPC 和 i18n 机制进入官方管理界面。用户可以使用自己配置的 OpenAI 兼容、Anthropic 或 Gemini API，让 Agent 读取路由器状态并执行受控配置。
 
-在原生后台侧边栏「系统」分组下多出一页，视觉沿用 GL 自己的设计令牌，深浅色主题自动跟随。
-页面是原生 Vue 单文件组件，复用 GL 的 `gl-card` / `gl-switch` / `gl-button` 等组件与 CSS 变量。
+## 主要能力
 
----
+- 在官方管理界面的「系统」菜单中提供 **GL-AI助手** 页面。
+- 通过自然语言读取路由器概况、Wi-Fi、信道、客户端和系统日志。
+- 支持修改 Wi-Fi、客户端黑名单、客户端限速、客户端名称、端口转发、时区和 WAN 访问策略。
+- 所有写操作按风险分级；默认模式下先展示变更预览，再等待用户确认。
+- 支持只读、询问和自动三种权限模式，高风险操作始终需要确认。
+- 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Google Gemini 协议。
+- 支持 HTTP(S) 代理，例如 `http://127.0.0.1:10810`。
+- 对回复进行安全 Markdown 渲染，支持标题、列表、表格、引用、代码和链接。
+- 自动脱敏 MAC、IP、密码、API Key 等敏感信息后再发送给模型。
+- 会话、审批、取消、错误和工具执行状态均可持久化或追踪。
 
-## 为什么这是可行的（实测结论，不是设想）
+## 实际效果
 
-全部结论来自在 **GL-MG1300 / GL 固件 4.10.x / OpenWrt 22.03.4 / ramips mt7621** 上的实测：
+以下截图来自真实 GL-MT3000 路由器，固件 4.11.0，OpenWrt 21.02 系列。
 
-| 事实 | 影响 |
-|---|---|
-| 原生 UI 是 Vue **2.6.12** 单页应用，nginx + lua 提供 | 注入点在 nginx 这一侧 |
-| 视图加载契约：`component = eval(await axios.get('/views/gl-sdk4-ui-<view>.common.js'))` | bundle 必须是**未压缩 `.js`**，且 **eval 的值就是组件对象** |
-| GL 的 Vue 是 **runtime-only** 构建，`module`/`exports`/`require`/`Vue` 在页面全局**都不存在** | 模板必须预编译；bundle 不能依赖 CommonJS 全局 |
-| 菜单来自 `/usr/share/oui/menu.d/*.json`，每次 `ui.get_menu_list` 现读 | **加文件即出现**，无需重启 |
-| `oui.rpc` 用 `dofile` **惰性加载** `/usr/lib/oui-httpd/rpc/<obj>` | 新增 RPC 对象**无需重启 nginx** |
-| 本机有 `lua 5.1.5` + `cjson` + `uci` + `ubus` + **`resty.http`** | Agent 内核零新增运行时 |
-| 路由器可直连 `api.deepseek.com`（实测 401 = 网络通） | 不依赖电脑做代理 |
+### 原生侧栏菜单
 
----
+菜单通过 `view: "gl-ai"` 注册，并使用 SDK4 精确要求的 `menu_gl-ai` i18n 键。冷启动和进入 Agent 页面后，侧栏均显示为 **GL-AI助手**。
 
-## 架构
+![GL-AI助手原生侧栏菜单](docs/screenshots/menu-sidebar-expanded.png)
 
+### Markdown 会话渲染
+
+Agent 回复中的表格、列表、粗体和行内代码会转换为与 GL 主题一致的排版，而不是直接显示 Markdown 源文本。
+
+![GL-AI助手 Markdown 会话](docs/screenshots/markdown-live.png)
+
+### 工具调用与确认卡
+
+涉及配置修改时，界面会显示工具步骤、风险等级、参数预览和确认按钮。未确认前不会执行写操作。
+
+![GL-AI助手工具确认卡](docs/screenshots/conversation-confirmation.png)
+
+## 工作方式
+
+```text
+浏览器（GL 原生管理界面）
+        │
+        ├── /usr/share/oui/menu.d/gl-ai.json
+        ├── /www/i18n/gl-sdk4-ui-gl-ai.<lang>.json
+        ├── /www/views/gl-sdk4-ui-gl-ai.common.js
+        └── /www/js/gl-ai-agent-boot.js
+                │
+                ▼
+        GL SDK4 /rpc 认证会话
+                │
+                ▼
+        gl_ai.rpc → Lua Agent Core
+                │
+        ┌───────┼────────┐
+        │       │        │
+      LLM    Tool     Policy
+     API    Registry  Confirm
+        │       │        │
+        └───────┴────────┘
+                │
+                ▼
+        GL SDK4 RPC / ubus
 ```
-浏览器（GL 原生后台）
-  ├── /js/gl-ai-agent-boot.js        注入：极轻，永不抛错
-  ├── /views/gl-sdk4-ui-gl-ai.common.js   Vue2 SFC 预编译 → eval 得到组件
-  └── POST /rpc  {"params":["<sid>","gl_ai","rpc",{"m":"<method>","p":{...}}]}
-                          │
-        ┌─────────────────▼──────────────────────────┐
-        │ /usr/lib/oui-httpd/rpc/gl_ai   ← 唯一稳定方法面 │
-        │   每次调用 loadfile 后端 + 失效 glai.* 模块缓存 │
-        │   ⇒ 升级后立即生效，永不要求重启 nginx          │
-        └─────────────────┬──────────────────────────┘
-                          │
-        ┌─────────────────▼──────────────────────────┐
-        │ /usr/lib/lua/glai/                          │
-        │   agent.lua    循环：思考→工具→观察（有上限） │
-        │   llm.lua      OpenAI / Anthropic / Gemini   │
-        │                流式解析，三种协议适配          │
-        │   tools.lua    工具注册表 = 单一事实源         │
-        │   redact.lua   MAC/IP/密钥脱敏后才发给模型     │
-        │   session.lua  会话持久化（掉电不丢）          │
-        │   config.lua   配置（密钥 0600，永不回显）     │
-        └─────────────────┬──────────────────────────┘
-                          │  oui.rpc → ubus（与原生 UI 同一条链路）
-                          ▼
-     wifi · clients · firewall · network · dns · system · …
-```
 
-### 三个关键设计决定
-
-**1. 不新增 nginx location。**
-最初我加了 SSE 端点（`/gl-ai-agent/chat`），后来**主动移除**。理由：那需要 `nginx -s reload`，
-而"装个插件要动 Web 服务器"在路由器上是真实风险，也容易和其它注入插件打架。
-现在流式效果由 **RPC + 事件日志轮询**实现 —— **安装/升级全程不碰 nginx**。
-`scripts/check-package.js` 会把"包里出现 `etc/nginx/`"判为失败，锁死这个约束。
-
-**2. RPC 入口只暴露一个永不变化的方法面 `rpc`。**
-`oui.rpc` 把方法表缓存在模块级 upvalue 里，worker 活着就一直是旧的。
-如果每次加功能都新增顶层方法名，就永远需要重启 nginx 才能生效。
-现在入口只有 `rpc`，它在每次调用时 `loadfile` 真正的实现并清掉 `glai.*` 的 `require` 缓存。
-代价是一次 dofile，收益是**升级立即生效**。
-
-**3. 工具注册表是单一事实源。**
-一张 Lua 表同时驱动：给 LLM 的 function schema、RPC 执行映射、UI 展示、风险分级与确认策略。
-新增能力只改一处，不会出现"schema 和实现对不上"。
-
----
-
-## 安全设计
-
-- **能力即权限**：模型只能从注册表选工具，无法凭空执行命令。
-- **三级权限**：`readonly` / `ask`（默认，只读自动放行、写操作弹确认）/ `auto`。
-- **参数二次校验**：类型、范围、正则、CIDR 在 Lua 侧按 schema 校验，不信任模型输出。
-- **隐私脱敏**：MAC 转稳定令牌（`M1`、`M2`…，本地保留映射以便后续调用解析回来）、
-  IP 只保留末段、密码字段一律替换为 `(set)`。客户端名单不会原样发给第三方模型。
-- **提示注入隔离**：工具结果、SSID、日志一律作为数据处理，系统提示明确要求不得当作指令。
-- **密钥保护**：`/etc/gl-ai-agent/config.json` 权限 0600，UI 只回显后 4 位，**刻意不做成 conffile**
-  （避免包管理器对密钥做指纹与变更询问）。
-- **预算熔断**：单轮工具步数、工具结果截断、历史窗口三重上限。
-
----
+Agent 不允许模型直接执行 Shell 命令。模型只能从注册工具中选择能力，Lua 侧会再次校验参数、范围、枚举值和风险级别。每个工具同时驱动模型 schema、RPC 映射、界面步骤和确认策略。
 
 ## 安装
 
-```sh
-# OpenWrt 22.03 / GL 固件 4.x（opkg）
-opkg install gl-ai-agent_<version>_all.ipk
+### OpenWrt 21/22、GL 4.x：`opkg` / `.ipk`
 
-# OpenWrt 24.10+（apk-tools v3）
-apk add --allow-untrusted gl-ai-agent-<version>.apk
+当前 GL-MT3000 测试设备属于这一类，使用：
+
+```sh
+opkg install /tmp/gl-ai-agent_0.1.0_all.ipk
 ```
 
-安装后打开 `http://<路由地址>` → 侧边栏「系统」→ **GL-AI助手**。
+也可以在 GL 管理页面的本地软件包入口上传 `.ipk`。
 
-卸载会**只剥离自己注入的 `<script>` 标签**，而不是整文件还原 —— 这样不会连带撤销
-glinjector 等其它插件对同一页面的改动。实测卸载后 `gl_home.html` 与安装前完全一致。
+### OpenWrt 24.10+：`apk` / APKv3
 
----
+正式 APKv3 必须使用 `apk-tools v3` 构建。CI 使用 Alpine 3.23 构建环境生成该包：
+
+```sh
+apk add --allow-untrusted /tmp/gl-ai-agent-0.1.0-r1.apk
+```
+
+Windows 本地没有 `apk-tools v3` 时，`npm run build:apk` 会生成 APKv2 回退包；该回退包用于本地结构验证，不应作为 OpenWrt 24.10+ 的正式 APKv3 发布包。
+
+安装或升级后，插件会执行一次经过 `nginx -t` 校验的 graceful reload，让 SDK4 立即刷新菜单和 i18n 注册表。插件不会新增 nginx 配置或 location。
+
+## 首次配置
+
+1. 打开 GL.iNet 原生管理界面。
+2. 进入「系统」→「GL-AI助手」。
+3. 打开右上角设置，填写模型 API 地址、模型名称和 API Key。
+4. 根据需要选择协议、权限模式和代理。
+5. 点击「测试连接」，确认模型可以返回响应。
+6. 从只读查询开始，再进行需要确认的配置修改。
+
+API Key 保存在路由器的 `/etc/gl-ai-agent/config.json`，文件权限为 `0600`，不会作为包配置文件覆盖或回显。
+
+## 运行时设备 Skill
+
+官方 GL 4.x 文档约束已固化到：
+
+[`package/data/usr/share/gl-ai-agent/skills/gl-router.md`](package/data/usr/share/gl-ai-agent/skills/gl-router.md)
+
+Skill 会在每轮对话中提供给模型，要求 Agent：
+
+- 先读取型号、固件、硬件能力和可用 RPC 对象。
+- 根据版本和型号过滤能力，不把文档中存在的功能当作当前设备必然支持。
+- 在修改 WAN/LAN、Wi-Fi、网络模式、防火墙、远程访问、密码、升级或恢复前说明影响。
+- 执行后回读状态，报告断连、重连和回滚信息。
+
+参考文档：[GL Router 4.x 文档中心](https://docs.gl-inet.cn/router/4/)
+
+## 兼容性
+
+| 项目 | 说明 |
+|---|---|
+| 原生 UI | GL SDK4，非 LuCI |
+| 已实测设备 | GL-MG1300、GL-MT3000 |
+| 当前真实验证 | GL-MT3000 / 固件 4.11.0 / OpenWrt 21.02 系列 |
+| `.ipk` | OpenWrt 21/22、GL 4.x，使用 `opkg` |
+| `.apk` | OpenWrt 24.10+，需要正式 APKv3 构建产物 |
+| CPU 架构 | Lua 和静态资源为主，包本身为 `all/noarch`；实际可用能力取决于设备 RPC 和硬件 |
+| UI 主题 | 跟随 GL SDK4 的默认、经典和暗色主题变量 |
+
+GL.iNet 不同型号和固件的 RPC 能力、Wi-Fi 频段、网络模式和功能边界存在差异。项目采用能力探测和运行时 skill 约束，但发布前仍应在目标型号上执行真机验证。
 
 ## 开发
 
 ```sh
 npm install
 
-npm run build:ui        # 编译 Vue SFC → SDK4 视图 bundle（.js + .gz）
-npm run build:ipk       # 打 ipk
-npm run build:apk       # 打 apk（CI 上用真 apk-tools v3；本地无 apk 时退化为 APKv2）
+# 构建前端视图
+npm run build:ui
 
-npm run check:bundle    # 校验 bundle 满足 eval 契约
-npm run check:package   # 校验包结构与内容
-npm run deploy          # 直接推到设备（开发快循环，不重启 nginx）
-npm run verify:ui       # 真机浏览器端到端验证 + 截图
+# 构建 OpenWrt ipk
+npm run build:ipk
+
+# 构建 apk；本机没有 apk-tools v3 时生成 APKv2 回退包
+npm run build:apk
+
+# 检查 bundle、包格式和内容
+npm run check:bundle
+npm run check:contract
+npm run check:formats
+npm run check:package
+
+# 静态检查
+npm run lint:shell
+npm run lint:lua
 ```
 
-脚本一览：
+### 真机联调
 
-| 脚本 | 作用 |
-|---|---|
-| `scripts/build-ui.js` | webpack + vue-loader 编译；**产出 eval 契约要求的形状** |
-| `scripts/check-eval-contract.js` | 用真实浏览器验证 `eval(code)` 返回组件 |
-| `scripts/verify-ui.js` | 登录真机 → 打开页面 → 截图 + 收集 console 错误 |
-| `scripts/test-install.js` | 真机 install → 校验 → 重装幂等 → 卸载 → 校验复原 |
-| `scripts/deploy.js` | 开发直推 |
+```powershell
+$env:GL_HOST = "192.168.8.1"
+$env:GL_PASSWORD = "<router-password>"
+$env:GL_HOSTKEY = "<ssh-host-key-fingerprint>"
 
-### 为什么 bundle 长这样
-
-GL 的加载器是 `component = eval(responseText)`，而页面里没有 `module`/`exports`。
-所以 `build-ui.js` 把 webpack 产物包成
-`(function(){ …原样…; return window['GL_AI_VIEW_BUNDLE'].default })()`，
-既不依赖任何 CommonJS 全局，也让 eval 的值正好是组件对象。
-`check-eval-contract.js` 在真实浏览器里断言这一点，改坏了会立刻失败。
-
----
-
-## 兼容性
-
-- **纯 Lua + 静态资源，无原生编译产物** → 任何架构（mipsel / aarch64 / armv7）通用。
-- 能力探测：`system.get_info` 的 `hardware_feature` 表 + `rpc/` 目录枚举，
-  动态决定哪些工具对本机可用，而非机型硬编码。
-- 语言：简中 / 繁中 / 英 / 日 / 德 / 西 / 意。
-- 与 glinjector 等第三方注入插件共存互不干扰。
-
----
-
-## 目录结构
-
-```
-package/
-  data/                        安装到路由器的文件树
-    usr/lib/oui-httpd/rpc/gl_ai  RPC 入口（稳定方法面）
-    usr/lib/lua/glai/*.lua       Agent 内核
-    usr/share/oui/menu.d/        菜单注册
-    usr/share/gl-validator.d/    参数白名单
-    www/views/                   视图 bundle（.js + .gz）
-    www/i18n/                    7 种语言
-    www/js/gl-ai-agent-boot.js   页面注入
-  control/                     ipk 控制文件与安装脚本
-src/ui/                        Vue 2 单文件组件
-scripts/                       构建、校验、部署、验证
-docs/DESIGN.md                 功能设计方案
+npm run deploy
+node scripts/verify-menu.js
+npm run verify:ui
 ```
 
-## 许可
+真机验证脚本会检查登录、菜单、视图加载、i18n、浏览器错误、确认卡和会话截图。测试产物默认写入 `artifacts/`；可发布截图复制到 `docs/screenshots/` 后在 README 中引用。
 
-MIT
+## 安全边界
+
+- 模型只能调用工具注册表中的能力，不能执行任意命令。
+- 写操作必须经过服务端参数校验和风险策略。
+- `auto` 模式不能通过客户端 RPC 参数提升权限。
+- WAN 访问、端口转发、重启和其他高风险操作始终需要确认。
+- 用户文本、设备结果和日志会与系统提示隔离处理。
+- 密码、Token、API Key、MAC 和 IP 会按策略脱敏。
+- 取消操作会写入服务端取消标记，阻止后续轮次继续推进。
+
+## 项目结构
+
+```text
+package/data/usr/lib/lua/glai/       Agent 核心、RPC、工具和会话
+package/data/usr/lib/oui-httpd/rpc/  GL SDK4 RPC 对象
+package/data/usr/share/oui/menu.d/   原生菜单注册
+package/data/www/i18n/               菜单和页面国际化
+package/data/www/views/              Vue 2 SDK4 view bundle
+package/data/www/js/                 页面注入 bootstrap
+package/data/usr/share/gl-ai-agent/skills/  运行时设备 skill
+src/ui/                              Vue 单文件组件源码
+scripts/                             构建、部署、检查和真机验证
+docs/screenshots/                    README 使用的真实验证截图
+```
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。

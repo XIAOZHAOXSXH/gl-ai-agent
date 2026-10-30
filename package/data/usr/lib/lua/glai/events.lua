@@ -5,9 +5,8 @@
 
   A live SSE endpoint would need its own nginx `location`, and adding one means
   reloading the web server on install - unacceptable for a plugin that is meant
-  to slip into a running router. So a turn runs in a background ngx.timer and
-  appends newline-delimited JSON here; the browser polls with a byte offset and
-  renders whatever is new.
+  to slip into a running router. A turn appends newline-delimited JSON here
+  while the browser drives short cooperative poll requests.
 
   The practical effect in the UI is identical (text appears progressively), and
   the install/upgrade path never touches nginx.

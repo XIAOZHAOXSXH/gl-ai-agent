@@ -14,6 +14,13 @@ cjson.encode_empty_table_as_object(false)
 
 local M = {}
 
+local function configure_proxy(client, provider)
+    local proxy = provider.proxy
+    if proxy and proxy ~= "" and client.set_proxy_options then
+        client:set_proxy_options({ http_proxy = proxy, https_proxy = proxy })
+    end
+end
+
 -- ---------------------------------------------------------------------------
 -- URL helpers
 -- ---------------------------------------------------------------------------
@@ -383,6 +390,7 @@ function M.stream(provider, messages, tools, on_event)
     local client = http.new()
     local timeout = tonumber(provider.timeout) or 60
     client:set_timeout(timeout * 1000)
+    configure_proxy(client, provider)
 
     local body = cjson.encode(build_body(provider, messages, tools, true))
     local url = endpoint(provider)
@@ -399,17 +407,10 @@ function M.stream(provider, messages, tools, on_event)
 
     if res.status ~= 200 then
         local detail = res.body or ""
-        -- Dump the outgoing body on rejection. Gateways usually answer with a
-        -- bare "invalid request", so the only way to find the offending field is
-        -- to see exactly what was sent. Written to a file because the nginx log
-        -- truncates long lines. The Authorization header is never included.
-        local f = io.open("/tmp/gl-ai-agent/last-request.json", "w")
-        if f then
-            f:write(body)
-            f:close()
-        end
-        ngx.log(ngx.ERR, "gl_ai llm HTTP ", res.status, " url=", url,
-            " bodyBytes=", #body, " body=", body:sub(1, 300))
+        -- Never log the URL (Gemini carries its API key in the query string) or
+        -- persist the request body (it contains user text and device context).
+        ngx.log(ngx.ERR, "gl_ai llm HTTP ", res.status,
+            " protocol=", provider.protocol or "openai", " bodyBytes=", #body)
         if #detail > 400 then detail = detail:sub(1, 400) .. "..." end
         return nil, "HTTP " .. tostring(res.status) .. ": " .. detail
     end
@@ -509,13 +510,14 @@ end
 --- Non-streaming completion.
 --
 -- Used when provider.stream is false (the default). One request, one response,
--- no long-lived read - which matters because a turn runs inside an ngx.timer.
+-- no long-lived read - which matters because a turn advances in short poll requests.
 -- Returns the same normalised shape as M.stream so the agent loop is identical
 -- either way.
 function M.complete(provider, messages, tools)
     local http = require "resty.http"
     local client = http.new()
     client:set_timeout((tonumber(provider.timeout) or 60) * 1000)
+    configure_proxy(client, provider)
 
     local body = cjson.encode(build_body(provider, messages, tools, false))
     local url = endpoint(provider)
@@ -531,10 +533,8 @@ function M.complete(provider, messages, tools)
     end
     if res.status ~= 200 then
         local detail = res.body or ""
-        local f = io.open("/tmp/gl-ai-agent/last-request.json", "w")
-        if f then f:write(body) f:close() end
-        ngx.log(ngx.ERR, "gl_ai llm HTTP ", res.status, " url=", url, " bodyBytes=", #body,
-            " body=", body:sub(1, 300))
+        ngx.log(ngx.ERR, "gl_ai llm HTTP ", res.status,
+            " protocol=", provider.protocol or "openai", " bodyBytes=", #body)
         if #detail > 400 then detail = detail:sub(1, 400) .. "..." end
         return nil, "HTTP " .. tostring(res.status) .. ": " .. detail
     end
@@ -618,6 +618,7 @@ function M.test(provider)
     local http = require "resty.http"
     local client = http.new()
     client:set_timeout((tonumber(provider.timeout) or 30) * 1000)
+    configure_proxy(client, provider)
     local body = cjson.encode(build_body(provider, {
         { role = "user", content = "Reply with exactly: OK" },
     }, nil, false))

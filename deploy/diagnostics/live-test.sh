@@ -1,6 +1,7 @@
 #!/bin/sh
 # Configure the real provider on the device and run a live end-to-end turn.
 RPC=http://127.0.0.1/rpc
+KEY=${GL_API_KEY:?set GL_API_KEY before running this test}
 call() {
     printf '%s' "$2" > /tmp/lq.json
     curl -s -H "glinet:1" -X POST "$RPC" --data-binary @/tmp/lq.json
@@ -8,7 +9,7 @@ call() {
 }
 
 echo "===== 1. save provider config ====="
-call set_config '{"jsonrpc":"2.0","method":"call","params":["","gl_ai","rpc",{"m":"set_config","p":{"provider":{"protocol":"openai","base_url":"https://api.moleapi.com/v1","model":"gpt-5.6-luna","api_key":"sk-vACd7jPqzXIQohymNxsJbJJc9LEVZ0Fz7LgPJCuu7huSlkck","verify_tls":false},"agent":{"permission":"readonly"}}}],"id":1}' | head -c 240
+call set_config "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"params\":[\"\",\"gl_ai\",\"rpc\",{\"m\":\"set_config\",\"p\":{\"provider\":{\"protocol\":\"openai\",\"base_url\":\"https://api.moleapi.com/v1\",\"model\":\"gpt-5.6-luna\",\"api_key\":\"$KEY\",\"verify_tls\":false},\"agent\":{\"permission\":\"readonly\"}}}],\"id\":1}" | head -c 240
 
 echo
 echo "===== 2. test connection (real HTTPS call) ====="

@@ -10,6 +10,21 @@
                 <div class="gla-hero-text">
                     <h1>{{ t('title') }}</h1>
                     <p>{{ subtitle }}</p>
+                    <!-- 作者署名：常驻可见，点击跳到 GitHub 仓库 -->
+                    <a class="gla-author" :href="repoUrl" target="_blank" rel="noopener noreferrer"
+                       :title="t('author_hint')">
+                        <svg class="gla-author-mark" viewBox="0 0 16 16" width="13" height="13"
+                             aria-hidden="true">
+                            <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+                        </svg>
+                        <span class="gla-author-label">{{ t('author_label') }}</span><strong
+                            class="gla-author-name">{{ authorName }}</strong>
+                        <svg class="gla-author-ext" viewBox="0 0 24 24" width="10" height="10"
+                             aria-hidden="true">
+                            <path d="M7 17L17 7M17 7H9M17 7v8" fill="none" stroke="currentColor"
+                                  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </a>
                 </div>
             </div>
             <div class="gla-hero-side">
@@ -108,6 +123,11 @@
                             <em>{{ t('stream_hint') }}</em>
                         </span>
                     </label>
+                    <div class="gla-field">
+                        <label>HTTP(S) Proxy</label>
+                        <input v-model.trim="form.proxy" type="text" spellcheck="false"
+                               placeholder="http://127.0.0.1:10810" />
+                    </div>
                 </details>
             </section>
         </transition>
@@ -186,8 +206,9 @@
                     </div>
 
                     <!-- 正文 -->
-                    <div v-if="m.content || m.streaming" class="gla-bubble">
-                        <span class="gla-text">{{ m.content }}</span>
+                    <div v-if="m.content || m.streaming" class="gla-bubble" :class="{ 'is-markdown': m.role === 'assistant' }">
+                        <div v-if="m.role === 'assistant'" class="gla-markdown" v-html="renderMarkdown(m.content)"></div>
+                        <span v-else class="gla-text">{{ m.content }}</span>
                         <span v-if="m.streaming" class="gla-caret"></span>
                     </div>
 
@@ -218,12 +239,162 @@
             </div>
             <div class="gla-foot">
                 <span class="gla-foot-pill">{{ footNote }}</span>
+                <a class="gla-foot-author" :href="repoUrl" target="_blank" rel="noopener noreferrer"
+                   :title="t('author_hint')">{{ t('author_label') }}{{ authorName }}</a>
             </div>
         </footer>
     </div>
 </template>
 
 <script>
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function safeMarkdownHref(value) {
+    const raw = String(value || '').trim();
+    if (!/^(https?:\/\/|mailto:)/i.test(raw)) return '#';
+    return escapeHtml(raw);
+}
+
+function renderInlineMarkdown(value) {
+    let text = escapeHtml(value);
+    const code = [];
+    text = text.replace(/`([^`\n]+)`/g, (_, body) => {
+        const token = `\u0000C${code.length}\u0000`;
+        code.push(`<code class="gla-md-inline-code">${body}</code>`);
+        return token;
+    });
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/gi,
+        (_, label, href) => `<a href="${safeMarkdownHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+    text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+    text = text.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+    text = text.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+    text = text.replace(/\u0000C(\d+)\u0000/g, (_, index) => code[Number(index)] || '');
+    return text.replace(/\n/g, '<br>');
+}
+
+function tableCells(line) {
+    let value = String(line || '').trim();
+    if (value.startsWith('|')) value = value.slice(1);
+    if (value.endsWith('|')) value = value.slice(0, -1);
+    return value.split('|').map((cell) => cell.trim());
+}
+
+function isTableDivider(line) {
+    const cells = tableCells(line);
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function renderMarkdown(value) {
+    const lines = String(value == null ? '' : value).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let paragraph = [];
+    let codeLines = null;
+    let codeLanguage = '';
+    let listType = null;
+    let listItems = [];
+
+    const flushParagraph = () => {
+        if (!paragraph.length) return;
+        out.push(`<p>${renderInlineMarkdown(paragraph.join('\n'))}</p>`);
+        paragraph = [];
+    };
+    const flushList = () => {
+        if (!listType) return;
+        const tag = listType === 'ol' ? 'ol' : 'ul';
+        out.push(`<${tag}>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`);
+        listType = null;
+        listItems = [];
+    };
+    const closeBlocks = () => {
+        flushParagraph();
+        flushList();
+    };
+
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const fence = line.match(/^\s*```\s*([\w+-]*)\s*$/);
+        if (codeLines) {
+            if (fence) {
+                out.push(`<pre class="gla-md-code"><code${codeLanguage ? ` class="language-${escapeHtml(codeLanguage)}"` : ''}>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+                codeLines = null;
+                codeLanguage = '';
+            } else {
+                codeLines.push(line);
+            }
+            continue;
+        }
+        if (fence) {
+            closeBlocks();
+            codeLines = [];
+            codeLanguage = fence[1] || '';
+            continue;
+        }
+        if (!line.trim()) {
+            closeBlocks();
+            continue;
+        }
+        if (/^\s*#{1,3}\s+/.test(line)) {
+            closeBlocks();
+            const heading = line.match(/^\s*(#{1,3})\s+(.+)$/);
+            const level = heading[1].length;
+            out.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+            continue;
+        }
+        if (/^\s*(---+|___+|\*\*\*+)\s*$/.test(line)) {
+            closeBlocks();
+            out.push('<hr>');
+            continue;
+        }
+        if (line.includes('|') && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+            closeBlocks();
+            const headers = tableCells(line);
+            index += 1;
+            const rows = [];
+            while (index + 1 < lines.length && lines[index + 1].includes('|') && lines[index + 1].trim()) {
+                index += 1;
+                rows.push(tableCells(lines[index]));
+            }
+            out.push(`<div class="gla-md-table-wrap"><table><thead><tr>${headers.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${renderInlineMarkdown(row[cellIndex] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+            continue;
+        }
+        const list = line.match(/^\s*([-*+]\s+|\d+[.)]\s+)(.+)$/);
+        if (list) {
+            const nextType = /^\d/.test(list[1]) ? 'ol' : 'ul';
+            if (listType && listType !== nextType) flushList();
+            listType = nextType;
+            listItems.push(list[2]);
+            continue;
+        }
+        if (listType) flushList();
+        if (/^\s*>\s?/.test(line)) {
+            flushParagraph();
+            out.push(`<blockquote>${renderInlineMarkdown(line.replace(/^\s*>\s?/, ''))}</blockquote>`);
+            continue;
+        }
+        paragraph.push(line);
+    }
+    if (codeLines) {
+        out.push(`<pre class="gla-md-code"><code${codeLanguage ? ` class="language-${escapeHtml(codeLanguage)}"` : ''}>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+    }
+    closeBlocks();
+    return out.join('');
+}
+
+// Author credit. A name and a URL are not translated, so they are constants
+// rather than locale entries; only the label beside them follows the UI
+// language. Keep the two in sync with package/control/control and README.md.
+const REPO_URL = 'https://github.com/XIAOZHAOXSXH/gl-ai-agent';
+const AUTHOR_NAME = '小赵先生';
+
 export default {
     name: 'GlAiView',
     data() {
@@ -244,6 +415,7 @@ export default {
                 permission: 'ask',
                 verify_tls: true,
                 stream: false,
+                proxy: '',
             },
             showSettings: false,
             testing: false,
@@ -255,6 +427,9 @@ export default {
             // working setup turns into "self signed certificate in certificate
             // chain".
             configLoaded: false,
+
+            repoUrl: REPO_URL,
+            authorName: AUTHOR_NAME,
 
             turnId: null,
             sessionId: null,
@@ -297,6 +472,7 @@ export default {
         this.loadConfig();
     },
     methods: {
+        renderMarkdown,
         /**
          * The GL SDK4 front end is a runtime-only Vue build whose $t
          * implementation is not a documented contract. Rather than depend on
@@ -364,6 +540,7 @@ export default {
                     this.form.permission = (cfg.agent && cfg.agent.permission) || 'ask';
                     this.form.verify_tls = p.verify_tls !== false;
                     this.form.stream = p.stream === true;
+                    this.form.proxy = p.proxy || '';
                     this.configLoaded = true;
                 })
                 .catch(() => { /* footer tells the user what to do */ });
@@ -386,6 +563,7 @@ export default {
                     model: this.form.model,
                     verify_tls: this.form.verify_tls,
                     stream: this.form.stream,
+                    proxy: this.form.proxy,
                 },
                 agent: { permission: this.form.permission },
             };
@@ -416,6 +594,7 @@ export default {
                 base_url: this.form.base_url,
                 model: this.form.model,
                 verify_tls: this.form.verify_tls,
+                proxy: this.form.proxy,
             };
             if (this.form.api_key) patch.api_key = this.form.api_key;
 
@@ -457,11 +636,19 @@ export default {
         reset() {
             this.stop();
             this.messages = [];
+            this.sessionId = null;
             this.reply = null;
             this.draft = '';
             this.autoGrow();
         },
         stop() {
+            const turnId = this.turnId;
+            const offset = this.offset;
+            if (turnId) {
+                this.rpc('cancel', { turn_id: turnId })
+                    .then(() => this.rpc('poll', { turn_id: turnId, offset: offset || 0 }))
+                    .catch(() => { /* the local UI still stops immediately */ });
+            }
             this.stopPolling();
             this.stopCountdown();
             this.busy = false;
@@ -499,7 +686,7 @@ export default {
             this.busy = true;
             this.scrollToEnd();
 
-            this.rpc('chat', { text })
+            this.rpc('chat', { text, session_id: this.sessionId || undefined })
                 .then((res) => {
                     this.turnId = res.turn_id;
                     this.sessionId = res.session_id;
@@ -791,6 +978,68 @@ export default {
     line-height: 18px;
     color: var(--text-weak);
 }
+
+/* author credit: a byline badge that opens the project on GitHub.
+   Same surface treatment as the ghost icon buttons beside it (card background,
+   hairline divider), so it reads as part of the native chrome rather than a
+   sticker; the primary tint only appears on hover. */
+.gla-author {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    margin-top: 8px;
+    padding: 0 10px 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--divider);
+    background: var(--background-card);
+    color: var(--text-weak);
+    font-size: 12px;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease,
+        transform 0.18s ease;
+}
+.gla-author-mark,
+.gla-author-ext {
+    flex: 0 0 auto;
+    transition: color 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+}
+.gla-author-mark {
+    color: var(--icon);
+}
+.gla-author-label {
+    color: inherit;
+}
+.gla-author-name {
+    font-weight: 600;
+    color: var(--text-title);
+    transition: color 0.18s ease;
+}
+.gla-author-ext {
+    opacity: 0.45;
+}
+.gla-author:hover {
+    background: var(--primary-background);
+    border-color: var(--primary);
+    color: var(--primary);
+}
+.gla-author:hover .gla-author-mark,
+.gla-author:hover .gla-author-name {
+    color: var(--primary);
+}
+.gla-author:hover .gla-author-ext {
+    opacity: 1;
+    transform: translate(1.5px, -1.5px);
+}
+.gla-author:active {
+    transform: scale(0.97);
+}
+.gla-author:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
 .gla-hero-side {
     display: flex;
     align-items: center;
@@ -1004,8 +1253,208 @@ export default {
 .gla-row.is-assistant .gla-bubble {
     border-bottom-left-radius: 4px;
 }
+.gla-bubble.is-markdown {
+    white-space: normal;
+}
+.gla-markdown {
+    min-width: 0;
+    line-height: 1.65;
+}
+.gla-markdown p,
+.gla-markdown h1,
+.gla-markdown h2,
+.gla-markdown h3,
+.gla-markdown blockquote,
+.gla-markdown ul,
+.gla-markdown ol,
+.gla-markdown pre,
+.gla-markdown .gla-md-table-wrap {
+    margin: 0 0 10px;
+}
+.gla-markdown > :last-child {
+    margin-bottom: 0;
+}
+.gla-markdown h1,
+.gla-markdown h2,
+.gla-markdown h3 {
+    color: var(--text-title);
+    line-height: 1.35;
+    font-weight: 650;
+}
+.gla-markdown h1 { font-size: 18px; }
+.gla-markdown h2 { font-size: 16px; }
+.gla-markdown h3 { font-size: 14px; }
+.gla-markdown ul,
+.gla-markdown ol {
+    padding-left: 22px;
+}
+.gla-markdown li + li {
+    margin-top: 4px;
+}
+.gla-markdown blockquote {
+    padding: 6px 10px;
+    border-left: 3px solid var(--primary);
+    color: var(--text-weak);
+    background: var(--primary-background);
+}
+.gla-markdown hr {
+    margin: 12px 0;
+    border: 0;
+    border-top: 1px solid var(--divider);
+}
+.gla-markdown a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.gla-markdown strong {
+    color: var(--text-title);
+    font-weight: 650;
+}
+.gla-row.is-user .gla-markdown strong,
+.gla-row.is-user .gla-markdown a {
+    color: #fff;
+}
+.gla-md-inline-code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--background-main);
+    color: var(--text-title);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.92em;
+}
+.gla-md-code {
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--divider);
+    border-radius: 8px;
+    background: var(--background-main);
+    color: var(--text-regular);
+    white-space: pre;
+}
+.gla-md-code code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+}
+.gla-md-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+}
+.gla-markdown table {
+    width: 100%;
+    min-width: 360px;
+    border-collapse: collapse;
+    font-size: 12.5px;
+}
+.gla-markdown th,
+.gla-markdown td {
+    padding: 6px 8px;
+    border: 1px solid var(--divider);
+    text-align: left;
+    vertical-align: top;
+}
+.gla-markdown th {
+    color: var(--text-title);
+    background: var(--primary-background);
+    font-weight: 600;
+}
 .gla-text {
     white-space: pre-wrap;
+}
+.gla-markdown {
+    font-size: 13.5px;
+    line-height: 22px;
+    overflow-wrap: anywhere;
+}
+.gla-markdown > :first-child {
+    margin-top: 0;
+}
+.gla-markdown > :last-child {
+    margin-bottom: 0;
+}
+.gla-markdown p {
+    margin: 0 0 10px;
+}
+.gla-markdown h1,
+.gla-markdown h2,
+.gla-markdown h3 {
+    margin: 14px 0 7px;
+    color: var(--text-title);
+    line-height: 1.35;
+    font-weight: 650;
+}
+.gla-markdown h1 { font-size: 18px; }
+.gla-markdown h2 { font-size: 16px; }
+.gla-markdown h3 { font-size: 14px; }
+.gla-markdown ul,
+.gla-markdown ol {
+    margin: 5px 0 11px;
+    padding-left: 22px;
+}
+.gla-markdown li {
+    margin: 3px 0;
+    padding-left: 2px;
+}
+.gla-markdown blockquote {
+    margin: 9px 0;
+    padding: 5px 11px;
+    border-left: 3px solid var(--primary);
+    color: var(--text-subtitle);
+    background: var(--primary-background);
+}
+.gla-markdown a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.gla-md-inline-code {
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: var(--background-main);
+    color: var(--text-strong);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+}
+.gla-md-code {
+    margin: 10px 0;
+    padding: 11px 12px;
+    overflow-x: auto;
+    border: 1px solid var(--divider);
+    border-radius: 7px;
+    background: var(--background-main);
+    color: var(--text-strong);
+    font: 12px/19px ui-monospace, Consolas, monospace;
+    white-space: pre;
+}
+.gla-md-table-wrap {
+    max-width: 100%;
+    margin: 9px 0 12px;
+    overflow-x: auto;
+}
+.gla-markdown table {
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    line-height: 18px;
+}
+.gla-markdown th,
+.gla-markdown td {
+    padding: 6px 9px;
+    border: 1px solid var(--divider);
+    text-align: left;
+    vertical-align: top;
+}
+.gla-markdown th {
+    color: var(--text-title);
+    background: var(--background-main);
+    font-weight: 600;
+}
+.gla-markdown hr {
+    margin: 12px 0;
+    border: 0;
+    border-top: 1px solid var(--divider);
 }
 .gla-caret {
     display: inline-block;
@@ -1213,12 +1662,36 @@ export default {
 }
 .gla-foot {
     display: flex;
+    align-items: center;
     justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
     padding: 8px 0 2px;
 }
 .gla-foot-pill {
     font-size: 11.5px;
     color: var(--text-hint);
+}
+/* the same credit again at the bottom, quiet enough to stay out of the way */
+.gla-foot-author {
+    font-size: 11.5px;
+    color: var(--text-hint);
+    text-decoration: none;
+    transition: color 0.16s ease;
+}
+.gla-foot-author::before {
+    content: '·';
+    margin-right: 8px;
+    color: var(--text-hint);
+}
+.gla-foot-author:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+.gla-foot-author:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 4px;
 }
 
 /* ---------------- keyframes ---------------- */

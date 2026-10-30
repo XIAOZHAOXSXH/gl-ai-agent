@@ -1,6 +1,6 @@
 /**
  * Verify the native sidebar renders our translated menu label (not the raw
- * i18n key), using a session that already has the view loaded.
+ * menu_gl-ai key), including on a cold shell.
  *
  *   node scripts/verify-menu.js
  */
@@ -9,7 +9,8 @@ const path = require('path');
 const { chromium } = require('playwright');
 
 const HOST = process.env.GL_HOST || '192.168.8.1';
-const PASS = process.env.GL_PASSWORD || 'Test@2026888';
+const PASS = process.env.GL_PASSWORD;
+if (!PASS) throw new Error('GL_PASSWORD is required for menu verification');
 const OUT = path.resolve(__dirname, '../artifacts');
 const PROXY = process.env.GL_PROXY || 'http://127.0.0.1:7890';
 const NO_PROXY = '127.0.0.1,localhost,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12';
@@ -55,7 +56,20 @@ function findBrowser() {
         await page.waitForTimeout(4500);
     }
 
-    // Visit the agent page first so the SDK loads our i18n bundle.
+    // Check the cold shell first. This catches the regression where the sidebar
+    // shows the raw menu_gl_ai key until the view is opened once.
+    await page.goto(`${base}/#/overview`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+    const readSidebar = () => page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a, li, span, div'));
+        const hit = links
+            .map((e) => (e.textContent || '').trim())
+            .filter((t) => t.includes('GL-AI') || t.includes('menu_gl-ai') || t.includes('menu_gl_ai'));
+        return Array.from(new Set(hit)).slice(0, 10);
+    });
+    const coldSidebar = await readSidebar();
+
+    // Visit the agent page and then re-render the shell to verify the warm path.
     await page.goto(`${base}/#/gl-ai`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(3500);
 
@@ -63,13 +77,7 @@ function findBrowser() {
     await page.goto(`${base}/#/overview`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(3000);
 
-    const sidebar = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a, li, span, div'));
-        const hit = links
-            .map((e) => (e.textContent || '').trim())
-            .filter((t) => t.includes('GL-AI') || t.includes('menu_gl_ai'));
-        return Array.from(new Set(hit)).slice(0, 10);
-    });
+    const sidebar = await readSidebar();
 
     await page.screenshot({ path: path.join(OUT, 'menu-sidebar.png') });
 
@@ -85,8 +93,10 @@ function findBrowser() {
 
     const report = {
         sidebarMatches: sidebar,
+        coldSidebarMatches: coldSidebar,
         translatesCorrectly: sidebar.some((t) => t.includes('GL-AI助手') || t.includes('GL-AI Assistant')),
-        showsRawKey: sidebar.some((t) => t.includes('menu_gl_ai')),
+        showsRawKey: sidebar.some((t) => t.includes('menu_gl-ai') || t.includes('menu_gl_ai')),
+        coldShowsRawKey: coldSidebar.some((t) => t.includes('menu_gl-ai') || t.includes('menu_gl_ai')),
         glAiRequests: i18nHits,
     };
     fs.writeFileSync(path.join(OUT, 'menu-report.json'), JSON.stringify(report, null, 2));

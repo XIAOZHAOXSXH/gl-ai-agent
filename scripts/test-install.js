@@ -12,7 +12,8 @@ const { execFileSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const HOST = process.env.GL_HOST || '192.168.8.1';
 const USER = process.env.GL_USER || 'root';
-const PASS = process.env.GL_PASSWORD || 'Test@2026888';
+const PASS = process.env.GL_PASSWORD;
+if (!PASS) throw new Error('GL_PASSWORD is required for install testing');
 const HOSTKEY = process.env.GL_HOSTKEY || 'SHA256:4lMbv4crd0mR02ngHvJcRTtZBCy1Qw6uhvrPVypE7YI';
 
 const PSCP = fs.existsSync('D:\\SoftWares\\PuTTY\\pscp.exe')

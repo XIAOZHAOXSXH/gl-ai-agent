@@ -522,6 +522,7 @@ function report(file, opts = {}) {
         'usr/lib/lua/glai/tools.lua',
         'usr/lib/lua/glai/llm.lua',
         'usr/lib/lua/glai/rpc_entry.lua',
+        'usr/share/gl-ai-agent/skills/gl-router.md',
     ];
     for (const n of need) {
         if (!norm.includes(n)) problems.push(`missing ${n}`);

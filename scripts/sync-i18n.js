@@ -36,6 +36,7 @@ const reference = locales[PREFIX + 'en.json'] || locales[files[0]];
 const union = new Set();
 for (const f of files) {
     for (const k of Object.keys(locales[f].gl_ai || {})) union.add(k);
+    if (locales[f]['menu_gl-ai']) union.add('menu_gl-ai');
     if (locales[f].menu_gl_ai) union.add('menu_gl_ai');
 }
 for (const k of Object.keys(reference.gl_ai || {})) union.add(k);
@@ -53,6 +54,10 @@ for (const f of files) {
     const data = locales[f];
     const missing = [];
     for (const k of [...union].sort()) {
+        if (k === 'menu_gl-ai') {
+            if (!data['menu_gl-ai']) missing.push(k);
+            continue;
+        }
         if (k === 'menu_gl_ai') {
             if (!data.menu_gl_ai) missing.push(k);
             continue;
@@ -66,7 +71,8 @@ for (const f of files) {
     console.log(`  ${WRITE ? 'PATCH' : 'MISS'} ${f}  -> ${missing.join(', ')}`);
     if (WRITE) {
         for (const k of missing) {
-            if (k === 'menu_gl_ai') data.menu_gl_ai = fallback.menu_gl_ai || 'GL-AI Assistant';
+            if (k === 'menu_gl-ai') data['menu_gl-ai'] = fallback['menu_gl-ai'] || 'GL-AI Assistant';
+            else if (k === 'menu_gl_ai') data.menu_gl_ai = fallback.menu_gl_ai || 'GL-AI Assistant';
             else data.gl_ai[k] = fallback[k] || k;
         }
         fs.writeFileSync(path.join(DIR, f), JSON.stringify(data, null, 4) + '\n', 'utf8');

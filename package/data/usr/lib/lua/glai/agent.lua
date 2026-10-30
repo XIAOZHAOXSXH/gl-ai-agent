@@ -26,6 +26,17 @@ local rpc = require "glai.rpc"
 local M = {}
 
 local MAX_TOOL_RESULT = 2048
+local SKILL_PATH = "/usr/share/gl-ai-agent/skills/gl-router.md"
+
+local function load_device_skill()
+    local f = io.open(SKILL_PATH, "r")
+    if not f then return "" end
+    local text = f:read(12000) or ""
+    f:close()
+    return text
+end
+
+local DEVICE_SKILL = load_device_skill()
 
 -- ---------------------------------------------------------------------------
 -- system prompt
@@ -127,8 +138,16 @@ end
 
 --- Ensure the system prompt is present.
 local function ensure_system(history, cfg)
-    if #history > 0 and history[1] and history[1].role == "system" then return end
+    if #history > 0 and history[1] and history[1].role == "system" then
+        if DEVICE_SKILL ~= "" and not tostring(history[1].content or ""):find("GL.iNet Router 4.x Device Skill", 1, true) then
+            history[1].content = tostring(history[1].content or "") .. "\n\nDevice skill:\n" .. DEVICE_SKILL
+        end
+        return
+    end
     local sys = SYSTEM_PROMPT
+    if DEVICE_SKILL ~= "" then
+        sys = sys .. "\n\nDevice skill:\n" .. DEVICE_SKILL
+    end
     if cfg.agent.send_device_context ~= false then
         sys = sys .. "\n\nCurrent device context:\n" .. device_context()
     end
@@ -173,7 +192,8 @@ function M.step_begin(history, user_text, emit, opts)
     end
 
     local permission = opts.permission or cfg.agent.permission or "ask"
-    local ctx = redact.new(cfg.agent.redact_client_identity)
+    local ctx = opts.redact_ctx or redact.new(cfg.agent.redact_client_identity)
+    opts.redact_ctx = ctx
     local trimmed = trim_history(history, tonumber(cfg.agent.history_turns) or 12)
     local schemas = tools.schemas()
 
@@ -221,6 +241,7 @@ function M.step_begin(history, user_text, emit, opts)
         caller = { permission = permission },
         calls = result.tool_calls,
         i = 1,
+        ctx = ctx,
     }
     return M.step_pending(rec, history, emit, opts)
 end
@@ -233,7 +254,8 @@ function M.step_pending(rec, history, emit, opts)
     local turns = require "glai.turns"
     local cfg = config.load()
     local permission = rec.caller and rec.caller.permission or cfg.agent.permission or "ask"
-    local ctx = rec.ctx or redact.new(cfg.agent.redact_client_identity)
+    local ctx = rec.ctx or opts.redact_ctx or redact.new(cfg.agent.redact_client_identity)
+    opts.redact_ctx = ctx
     rec.ctx = ctx
 
     -- Changes the user has already refused, keyed by tool plus arguments. The

@@ -6,7 +6,10 @@
 
 ## 一、当前状态：端到端可用，本轮回归全绿
 
-真机 `192.168.8.1`（GL-MG1300 / GL 固件 4.10.1，恢复出厂后已重装）上已验证通过：
+真机 `192.168.8.1` 上已验证通过。当前测试机是 **GL-MT3000 / GL 固件 4.11.0**
+（OpenWrt 21.02，aarch64）。该机 SSH 主机指纹与脚本里默认的 MG1300 不同，
+换机时用 `GL_HOSTKEY=SHA256:…` 覆盖（`plink` 首次连接会把指纹打印出来）；
+root 密码不写进仓库，用 `GL_PASSWORD` 传入。此前一轮在 GL-MG1300 / 4.10.1 上同样通过。
 
 | 验证 | 命令 | 结果 |
 |---|---|---|
@@ -14,7 +17,8 @@
 | 安装生命周期 | `node scripts/test-install.js` | 全部文件就位 → **未加任何 nginx 配置** → 注入 1 次 → 重装幂等 → 卸载后 md5 复原 |
 | 浏览器全流程 | `GL_API_KEY=… node scripts/verify-e2e.js` | **12/12** |
 | 确认闸门 | `GL_API_KEY=… node scripts/verify-approval.js` | **7/7** |
-| 打包 | `build-ipk.js` / `build-apk.js` / `check-package.js` | ipk 与 apk 均 **RESULT: OK** |
+| 作者署名徽章 | `GL_PASSWORD=… node scripts/verify-ui.js` | `authorChecks` 七项全 true：徽章可见、文本含「小赵先生」、href 指向仓库、`_blank`+`noopener`、底部弱化行同样成立、无横向溢出；另用浏览器点过两处链接，新标签确实落在仓库页 |
+| 打包 | `build-ipk.js` / `build-apk.js` / `check-package.js` | ipk 与 apk 均 **RESULT: OK**；`opkg install --force-reinstall` 后 md5 与本地构建一致 |
 | Lint | `lint-shell.js` / `lint-lua.js` | shell 51 文件 0 问题；Lua 需本机或 CI 装 lua5.1 |
 
 真实对话示例（`deepseek-flash`，网关 `https://api.moleapi.com/v1`）：
@@ -66,6 +70,13 @@ confirm  args:{band:"2g", kind:"main", ssid:"GL-Test-2G"}
 - 页面全局**没有** `module` / `exports` / `require` / `Vue`；GL 的 Vue 是 **runtime-only** 构建，模板必须预编译
 - 菜单来自 `/usr/share/oui/menu.d/*.json`，每请求现读，加文件即生效
 - 视图内 i18n 用 `gl_ai.*` 键；菜单标题键是 `menu_gl_ai`
+- **作者署名**：`src/ui/GlAiView.vue` 里 `.gla-author`（hero 徽章）+ `.gla-foot-author`（底部弱化）
+  两处都指向 `https://github.com/XIAOZHAOXSXH/gl-ai-agent`；名字和 URL 是组件常量
+  （`AUTHOR_NAME` / `REPO_URL`），标签与 tooltip 走 i18n（`author_label` / `author_hint`）。
+  已实测：三个主题、1100px 窄屏、键盘 Tab 焦点环、点击真开新标签到仓库（标题正确）。
+  徽章外观与右侧齿轮/新建按钮同一套表面（card 底 + divider 边框），hover 才转 primary。
+- 后台主题存在 `localStorage.theme`（`default` / `dark` / `classic`）；`prefers-color-scheme`
+  **不会**切换 GL 主题，视觉验证时要改这个键再 reload
 
 ### 后端
 
@@ -165,7 +176,7 @@ node scripts/check-package.js dist/*.ipk     # 校验包内容
 node scripts/check-package.js x.apk --installed-root /tmp/apkroot   # apk v3：对装好的目录断言
 node scripts/check-package-formats.js        # 5 种容器 + 清单模式的回归
 node scripts/check-workflow-shell.js         # 校验 workflow 里 run: 块的 shell 语法
-node scripts/deploy.js                       # 开发直推（不重启 nginx）
+node scripts/deploy.js                       # 开发直推（校验后 graceful reload）
 node scripts/deploy.js --uninstall           # 完全卸载
 node scripts/reset-device.js                 # 清理 /tmp 并报告设备状态
 node scripts/glai-check.sh                   # （推送到设备后执行）后端静态+运行时自检

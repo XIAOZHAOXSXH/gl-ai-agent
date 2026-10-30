@@ -38,9 +38,9 @@ local DEFAULTS = {
         verify_tls = true,
         -- Ask the provider to stream tokens.
         --
-        -- Off by default. A turn runs inside an ngx.timer, and holding a
-        -- long-lived streaming read across a timer coroutine's lifetime is not
-        -- reliable - it surfaces as "can't resume a dead coroutine". A
+        -- Off by default. A turn advances inside short cooperative poll
+        -- requests, and holding a long-lived streaming read across request
+        -- boundaries is not reliable. A
         -- non-streaming call is a single request/response, which is rock solid
         -- here; the UI still animates the reply in progressively, so the felt
         -- experience is nearly identical. Turn this on for providers and
@@ -80,6 +80,7 @@ end
 
 local function ensure_dir()
     os.execute("mkdir -p " .. M.DIR .. " " .. M.DIR .. "/sessions")
+    os.execute("chmod 700 " .. M.DIR .. " " .. M.DIR .. "/sessions")
 end
 
 local function read_file(path)
@@ -91,10 +92,15 @@ local function read_file(path)
 end
 
 local function write_file(path, data)
-    local f = io.open(path, "w")
+    local tmp = path .. ".tmp." .. tostring(math.random(100000, 999999))
+    local f = io.open(tmp, "w")
     if not f then return false end
     f:write(data)
     f:close()
+    if not os.rename(tmp, path) then
+        os.remove(tmp)
+        return false
+    end
     return true
 end
 
@@ -116,7 +122,7 @@ end
 
 function M.save(cfg)
     ensure_dir()
-    write_file(M.FILE, cjson.encode(cfg))
+    if not write_file(M.FILE, cjson.encode(cfg)) then return false end
     os.execute("chmod 600 " .. M.FILE)
     return true
 end
@@ -125,7 +131,7 @@ end
 function M.update(patch)
     local cfg = M.load()
     merge(cfg, patch or {})
-    M.save(cfg)
+    if not M.save(cfg) then return nil, "could not save configuration" end
     return cfg
 end
 

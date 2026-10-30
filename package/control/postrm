@@ -7,8 +7,15 @@
 # undo their work. A surgical removal restores the page to exactly the state
 # it had before we were installed, even in a crowded page.
 #
-# User data (config, sessions) survives by default; set KEEP_DATA= to purge.
+# User data (config, sessions) survives by default; pass purge or KEEP_DATA=purge to remove it.
 set -e
+
+# During an opkg/apk upgrade the old package's postrm is called with
+# "upgrade" after the new payload is already installed. Never remove shared
+# paths in that phase or the fresh package disappears.
+case "${1:-remove}" in
+    upgrade|abort-upgrade) exit 0 ;;
+esac
 
 PKG=gl-ai-agent
 ETCDIR=/etc/$PKG
@@ -23,6 +30,8 @@ fi
 rm -f /www/views/gl-sdk4-ui-gl-ai.common.js
 rm -f /www/views/gl-sdk4-ui-gl-ai.common.js.gz
 rm -f /www/js/$PKG-boot.js
+rm -f /usr/share/oui/menu.d/gl-ai.json
+rm -f /www/i18n/gl-sdk4-ui-gl-ai.*.json
 rm -f /usr/lib/oui-httpd/rpc/gl_ai
 rm -f /usr/share/gl-validator.d/gl_ai.lua
 rm -f /etc/nginx/gl-conf.d/$PKG.conf
@@ -32,7 +41,7 @@ rm -f /etc/nginx/conf.d/$PKG-main.conf
 rm -f "$ETCDIR/gl_home.html.orig"
 
 # ---- user data ----------------------------------------------------------
-if [ -z "$KEEP_DATA" ]; then
+if [ "$1" = "purge" ] || [ "$KEEP_DATA" = "purge" ]; then
     rm -rf "$ETCDIR"
 fi
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Probe the OpenAI Responses API shape from the router itself.
-KEY='sk-vACd7jPqzXIQohymNxsJbJJc9LEVZ0Fz7LgPJCuu7huSlkck'
+KEY=${GL_API_KEY:?set GL_API_KEY before running this probe}
 BASE='https://api.moleapi.com/v1'
 
 echo "===== 1. non-streaming /responses ====="

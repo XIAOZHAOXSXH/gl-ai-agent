@@ -37,6 +37,13 @@ function M.set_config(params)
     params = params or {}
     local patch = {}
 
+    local function bounded_string(value, name, max)
+        if value == nil then return nil end
+        value = trim(value)
+        if #value > max then return nil, name .. " is too long" end
+        return value
+    end
+
     if params.provider then
         patch.provider = {}
         for _, k in ipairs({
@@ -45,8 +52,41 @@ function M.set_config(params)
         }) do
             if params.provider[k] ~= nil then patch.provider[k] = params.provider[k] end
         end
+        for _, item in ipairs({
+            { "base_url", 512 }, { "model", 128 }, { "proxy", 512 },
+        }) do
+            if params.provider[item[1]] ~= nil then
+                local value, err = bounded_string(params.provider[item[1]], item[1], item[2])
+                if not value then return { ok = false, error = err } end
+                patch.provider[item[1]] = value
+            end
+        end
+        if patch.provider.proxy and patch.provider.proxy ~= ""
+            and not patch.provider.proxy:match("^https?://[^%s]+$") then
+            return { ok = false, error = "proxy must be an http:// or https:// URL" }
+        end
+        if params.provider.protocol ~= nil and not ({ openai = true, responses = true, anthropic = true, gemini = true })[params.provider.protocol] then
+            return { ok = false, error = "unsupported protocol" }
+        end
+        if params.provider.max_tokens ~= nil then
+            local n = tonumber(params.provider.max_tokens)
+            if not n or n < 64 or n > 32768 then return { ok = false, error = "max_tokens must be 64..32768" } end
+            patch.provider.max_tokens = math.floor(n)
+        end
+        if params.provider.timeout ~= nil then
+            local n = tonumber(params.provider.timeout)
+            if not n or n < 5 or n > 300 then return { ok = false, error = "timeout must be 5..300 seconds" } end
+            patch.provider.timeout = math.floor(n)
+        end
+        if params.provider.temperature ~= nil then
+            local n = tonumber(params.provider.temperature)
+            if not n or n < 0 or n > 2 then return { ok = false, error = "temperature must be 0..2" } end
+            patch.provider.temperature = n
+        end
         if params.provider.api_key and trim(params.provider.api_key) ~= "" then
-            patch.provider.api_key = trim(params.provider.api_key)
+            local key = trim(params.provider.api_key)
+            if #key > 1024 then return { ok = false, error = "api_key is too long" } end
+            patch.provider.api_key = key
         end
         if params.provider.clear_api_key then
             patch.provider.api_key = ""
@@ -60,6 +100,20 @@ function M.set_config(params)
             "send_device_context", "redact_client_identity", "confirm_timeout",
         }) do
             if params.agent[k] ~= nil then patch.agent[k] = params.agent[k] end
+        end
+        if params.agent.permission ~= nil and not ({ readonly = true, ask = true, auto = true })[params.agent.permission] then
+            return { ok = false, error = "permission must be readonly, ask or auto" }
+        end
+        for _, item in ipairs({
+            { "max_steps", 1, 16 }, { "history_turns", 1, 40 }, { "confirm_timeout", 15, 300 },
+        }) do
+            if params.agent[item[1]] ~= nil then
+                local n = tonumber(params.agent[item[1]])
+                if not n or n < item[2] or n > item[3] then
+                    return { ok = false, error = item[1] .. " is out of range" }
+                end
+                patch.agent[item[1]] = math.floor(n)
+            end
         end
     end
 
@@ -202,12 +256,11 @@ function M.pending_approvals()
     return { pending = out }
 end
 
-function M.cancel()
-    -- A turn runs in a background timer, so there is no request to abort; the UI
-    -- simply stops polling and the run finishes on its own within its step
-    -- budget. Nothing is left half-applied because every write is confirmed
-    -- before it runs.
-    return { ok = true }
+function M.cancel(params)
+    params = params or {}
+    if not params.turn_id then return { ok = false, error = "turn_id required" } end
+    local turns = require "glai.turns"
+    return { ok = turns.cancel(params.turn_id) }
 end
 
 -- ---------------------------------------------------------------------------
